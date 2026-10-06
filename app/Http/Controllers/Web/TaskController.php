@@ -1,0 +1,1031 @@
+<?php
+
+namespace App\Http\Controllers\Web;
+
+use App\Domain\Tasks\AssignTask;
+use App\Domain\Tasks\CreateTask;
+use App\Domain\Tasks\RescheduleTask;
+use App\Domain\Tasks\TransitionTaskStatus;
+use App\Http\Controllers\Controller;
+use App\Http\Requests\StoreTaskRequest;
+use App\Http\Requests\UpdateTaskRequest;
+use App\Models\ChecklistTemplate;
+use App\Models\Client;
+use App\Models\Property;
+use App\Models\Task;
+use App\Models\TaskAssignment;
+use App\Models\TaskType;
+use App\Models\Team;
+use App\Models\User;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use Illuminate\View\View;
+
+class TaskController extends Controller
+{
+    /**
+     * Task list — all users' tasks. Gated by permission:4.9.
+     */
+    public function index(Request $request): View
+    {
+        $rawTab = $request->string('tab')->toString();
+        $hasFilterFields = $request->hasAny(['status', 'priority', 'task_type_id', 'property_id', 'assignee_id', 'from', 'to']);
+
+        if (empty($rawTab)) {
+            $tab = $hasFilterFields ? 'filters' : 'today';
+        } else {
+            $tab = in_array($rawTab, ['today', 'tomorrow', 'week', 'filters', 'all'], true) ? $rawTab : 'today';
+        }
+
+        // When loading the filter tab from navigation without explicit query filters, pre-fill current date
+        if ($tab === 'filters' && ! $request->has('from') && ! $request->has('to') && ! $hasFilterFields) {
+            $request->merge([
+                'from' => today()->toDateString(),
+                'to' => today()->toDateString(),
+            ]);
+        }
+
+        $isFilterInitial = ($tab === 'filters' && ! $request->has('apply') && ! $hasFilterFields);
+
+        if ($isFilterInitial) {
+            $tasks = new \Illuminate\Pagination\LengthAwarePaginator([], 0, 25, 1, ['path' => $request->url(), 'query' => $request->query()]);
+        } else {
+            $query = Task::query()
+                ->with(['taskType:id,name', 'property.client:id,name,company_name', 'assignments.assignee'])
+                ->filter($request->only(['status', 'priority', 'task_type_id', 'property_id', 'assignee_id', 'from', 'to']));
+
+            // Explicit date range wins over tab shortcuts.
+            if ($request->filled('from') || $request->filled('to')) {
+                if ($request->filled('from')) {
+                    $query->where('scheduled_start_at', '>=', \Carbon\Carbon::parse($request->string('from'))->startOfDay());
+                }
+                if ($request->filled('to')) {
+                    $query->where('scheduled_start_at', '<=', \Carbon\Carbon::parse($request->string('to'))->endOfDay());
+                }
+            } elseif ($tab === 'today') {
+                $query->whereDate('scheduled_start_at', today());
+            } elseif ($tab === 'tomorrow') {
+                $query->whereDate('scheduled_start_at', today()->addDay());
+            } elseif ($tab === 'week') {
+                $query->whereBetween('scheduled_start_at', [now()->startOfWeek(), now()->endOfWeek()]);
+            }
+
+            $tasks = $query->orderByDesc('scheduled_start_at')->paginate(25)->withQueryString();
+        }
+
+        $base = Task::query();
+        $counts = [
+            'today' => (clone $base)->whereDate('scheduled_start_at', today())->count(),
+            'tomorrow' => (clone $base)->whereDate('scheduled_start_at', today()->addDay())->count(),
+            'week' => (clone $base)->whereBetween('scheduled_start_at', [now()->startOfWeek(), now()->endOfWeek()])->count(),
+        ];
+
+        if ($request->wantsJson()) {
+            return view('partials.task-list', ['tasks' => $tasks]);
+        }
+
+        return view('pages.tasks', [
+            'tasks' => $tasks,
+            'tab' => $tab,
+            'counts' => $counts,
+            'taskTypes' => TaskType::where('active', true)->orderBy('sort_order')->get(['id', 'name']),
+            'properties' => Property::with('client:id,name,company_name')->orderBy('name')->get(['id', 'name', 'property_code', 'address', 'formatted_address', 'client_id']),
+            'assignees' => User::whereIn('role', [User::ROLE_SUPERVISOR, User::ROLE_CLEANER])->orderBy('name')->get(['id', 'name', 'role']),
+        ]);
+    }
+
+    /**
+     * Task work sheet in dense Excel spreadsheet format with date range & personnel Select2 filtering.
+     */
+    public function worksheet(Request $request): View
+    {
+        $startDate = $request->string('start_date', today()->toDateString())->toString();
+        $endDate = $request->string('end_date', today()->toDateString())->toString();
+        $personnelIds = $request->input('personnel_ids', []);
+        if (is_string($personnelIds)) {
+            $personnelIds = array_filter(explode(',', $personnelIds));
+        }
+        $status = $request->string('status', 'all')->toString();
+        $propertyId = $request->input('property_id');
+        $clientId = $request->input('client_id');
+        $taskTypeId = $request->input('task_type_id');
+
+        $query = Task::query()
+            ->with([
+                'property.client:id,name,company_name',
+                'taskType:id,name',
+                'assignments.assignee:id,name,email,role',
+                'assignedManager:id,name',
+                'subtasks:id,task_id,title,completed_at',
+                'checklistSnapshot',
+                'evidence:id,task_id,evidence_type,file_path',
+                'comments:id,task_id,comment,created_at,user_id',
+            ]);
+
+        // Cleaners only see their own tasks unless they have 4.9 permission
+        if (! $request->user()->hasPermission('4.9')) {
+            $query->forUser($request->user());
+        }
+
+        if ($startDate) {
+            $query->where('scheduled_start_at', '>=', \Carbon\Carbon::parse($startDate)->startOfDay());
+        }
+        if ($endDate) {
+            $query->where('scheduled_start_at', '<=', \Carbon\Carbon::parse($endDate)->endOfDay());
+        }
+
+        if (! empty($personnelIds)) {
+            $query->where(function ($q) use ($personnelIds) {
+                $q->whereHas('assignments', fn ($sq) => $sq->whereIn('assignee_id', $personnelIds))
+                  ->orWhereIn('assigned_manager_id', $personnelIds);
+            });
+        }
+
+        if ($status && $status !== 'all') {
+            if ($status === 'not_started') {
+                $query->whereIn('status', ['not_started', 'draft', 'scheduled', 'unassigned', 'assigned', 'accepted']);
+            } elseif ($status === 'in_progress') {
+                $query->whereIn('status', ['in_progress', 'paused', 'delayed']);
+            } elseif ($status === 'completed') {
+                $query->whereIn('status', ['completed', 'submitted_for_approval', 'approved']);
+            } elseif ($status === 'cancelled') {
+                $query->whereIn('status', ['cancelled', 'declined', 'rejected']);
+            } else {
+                $query->where('status', $status);
+            }
+        }
+
+        if ($propertyId) {
+            $query->where('property_id', $propertyId);
+        }
+
+        if ($clientId) {
+            $query->whereHas('property', fn ($q) => $q->where('client_id', $clientId));
+        }
+
+        if ($taskTypeId) {
+            $query->where('task_type_id', $taskTypeId);
+        }
+
+        $tasks = $query->orderBy('scheduled_start_at')->get();
+
+        // Calculate summary KPIs for the sheet
+        $totalTasks = $tasks->count();
+        $completedTasks = $tasks->whereIn('status', [Task::STATUS_COMPLETED, Task::STATUS_APPROVED])->count();
+        $inProgressTasks = $tasks->whereIn('status', [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED])->count();
+        $assignedTasks = $tasks->whereIn('status', [Task::STATUS_ASSIGNED, Task::STATUS_ACCEPTED, Task::STATUS_SCHEDULED])->count();
+
+        $totalWorkedSeconds = (int) $tasks->sum(function ($t) {
+            if ($t->worked_seconds > 0) return $t->worked_seconds;
+            if ($t->started_at && $t->completed_at) return $t->started_at->diffInSeconds($t->completed_at);
+            if ($t->started_at) return $t->started_at->diffInSeconds(now());
+            return 0;
+        });
+
+        $totalEstMinutes = (int) $tasks->sum('estimated_duration_minutes');
+        $completionRate = $totalTasks > 0 ? round(($completedTasks / $totalTasks) * 100, 1) : 0;
+
+        $personnelList = User::where('status', User::STATUS_ACTIVE)
+            ->whereIn('role', [User::ROLE_CLEANER, User::ROLE_SUPERVISOR, User::ROLE_ADMIN])
+            ->orderBy('name')
+            ->get(['id', 'name', 'role', 'email']);
+
+        $properties = Property::orderBy('name')->get(['id', 'name']);
+        $clients = Client::where('active', true)->orderBy('name')->get(['id', 'name', 'company_name']);
+        $taskTypes = TaskType::where('active', true)->orderBy('sort_order')->get(['id', 'name']);
+
+        return view('pages.tasks-worksheet', [
+            'tasks' => $tasks,
+            'startDate' => $startDate,
+            'endDate' => $endDate,
+            'selectedPersonnelIds' => (array) $personnelIds,
+            'selectedStatus' => $status,
+            'selectedPropertyId' => $propertyId,
+            'selectedClientId' => $clientId,
+            'selectedTaskTypeId' => $taskTypeId,
+            'personnelList' => $personnelList,
+            'properties' => $properties,
+            'clients' => $clients,
+            'taskTypes' => $taskTypes,
+            'summary' => [
+                'total_tasks' => $totalTasks,
+                'completed_tasks' => $completedTasks,
+                'in_progress_tasks' => $inProgressTasks,
+                'assigned_tasks' => $assignedTasks,
+                'completion_rate' => $completionRate,
+                'total_worked_seconds' => $totalWorkedSeconds,
+                'total_worked_formatted' => sprintf('%02d:%02d:%02d', floor($totalWorkedSeconds / 3600), floor(($totalWorkedSeconds % 3600) / 60), $totalWorkedSeconds % 60),
+                'total_est_hours' => round($totalEstMinutes / 60, 1),
+            ],
+        ]);
+    }
+
+    /**
+     * My tasks — current user's own assignments with date subtabs & task history separation.
+     */
+    public function my(Request $request): View
+    {
+        $user = $request->user();
+        $rawTab = $request->string('tab', 'today')->toString();
+        
+        // Tab Aliases
+        if ($rawTab === 'current') {
+            $tab = 'all';
+        } elseif ($rawTab === 'finished') {
+            $tab = 'history';
+        } else {
+            $tab = $rawTab;
+        }
+
+        $search = $request->string('search')->trim()->toString();
+        $sort = $request->string('sort', 'suggested')->toString();
+
+        $finishedStatuses = [Task::STATUS_COMPLETED, Task::STATUS_APPROVED, Task::STATUS_REJECTED, Task::STATUS_CANCELLED];
+
+        $baseQuery = Task::query()
+            ->with(['taskType:id,name', 'property:id,name,address', 'assignments.assignee'])
+            ->forUser($user)
+            ->when(! empty($search), function ($q) use ($search) {
+                $q->where(function ($sub) use ($search) {
+                    $sub->where('title', 'like', "%{$search}%")
+                        ->orWhere('reference_number', 'like', "%{$search}%")
+                        ->orWhereHas('property', fn ($pq) => $pq->where('name', 'like', "%{$search}%")->orWhere('address', 'like', "%{$search}%"));
+                });
+            });
+
+        // Tab Filtering
+        $query = (clone $baseQuery);
+
+        if ($tab === 'history') {
+            $query->whereIn('status', $finishedStatuses);
+        } else {
+            $query->whereNotIn('status', $finishedStatuses);
+
+            if ($tab === 'today') {
+                // Include today's tasks and all previous overdue active tasks
+                $query->where(function ($subQ) {
+                    $subQ->where('scheduled_start_at', '<=', today()->endOfDay())
+                         ->orWhereNull('scheduled_start_at');
+                });
+            } elseif ($tab === 'tomorrow') {
+                $query->whereDate('scheduled_start_at', today()->addDay());
+            } elseif ($tab === 'week') {
+                $query->whereBetween('scheduled_start_at', [now()->startOfWeek(), now()->endOfWeek()]);
+            }
+        }
+
+        if ($sort === 'scheduled') {
+            $query->orderBy('scheduled_start_at');
+        } elseif ($sort === 'priority') {
+            $query->orderByRaw("CASE priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END");
+        } else {
+            // Suggested sort: Overdue first, then in-progress, then scheduled time
+            $nowStr = now()->toDateTimeString();
+            $query->orderByRaw("CASE WHEN scheduled_start_at < ? AND status NOT IN ('completed','approved') THEN 0 WHEN status = 'in_progress' THEN 1 ELSE 2 END", [$nowStr])
+                ->orderBy('scheduled_start_at');
+        }
+
+        $tasksPaginated = $query->paginate(30)->withQueryString();
+
+        // Counts for sub-tabs
+        $todayCount = (clone $baseQuery)
+            ->whereNotIn('status', $finishedStatuses)
+            ->where(function ($subQ) {
+                $subQ->where('scheduled_start_at', '<=', today()->endOfDay())
+                     ->orWhereNull('scheduled_start_at');
+            })
+            ->count();
+        $tomorrowCount = (clone $baseQuery)->whereNotIn('status', $finishedStatuses)->whereDate('scheduled_start_at', today()->addDay())->count();
+        $weekCount = (clone $baseQuery)->whereNotIn('status', $finishedStatuses)->whereBetween('scheduled_start_at', [now()->startOfWeek(), now()->endOfWeek()])->count();
+        $allActiveCount = (clone $baseQuery)->whereNotIn('status', $finishedStatuses)->count();
+        $historyCount = (clone $baseQuery)->whereIn('status', $finishedStatuses)->count();
+
+        // Group tasks into bands for rendering
+        $overdueGroup = (clone $baseQuery)
+            ->whereNotIn('status', $finishedStatuses)
+            ->where('scheduled_start_at', '<', today()->startOfDay())
+            ->orderBy('scheduled_start_at')
+            ->get();
+
+        if ($request->wantsJson()) {
+            return view('partials.task-cards', [
+                'tasks' => $tasksPaginated,
+                'overdueGroup' => $overdueGroup,
+                'tab' => $tab,
+            ]);
+        }
+
+        return view('pages.tasks-cleaner', [
+            'tasks' => $tasksPaginated,
+            'overdueGroup' => $overdueGroup,
+            'tab' => $tab,
+            'search' => $search,
+            'sort' => $sort,
+            'counts' => [
+                'today' => $todayCount,
+                'tomorrow' => $tomorrowCount,
+                'week' => $weekCount,
+                'all' => $allActiveCount,
+                'history' => $historyCount,
+            ],
+            'current' => $tasksPaginated,
+            'finished' => $tasksPaginated,
+        ]);
+    }
+
+    public function create(): View
+    {
+        return $this->formData('pages.task-create');
+    }
+
+    public function store(StoreTaskRequest $request, CreateTask $createTask): RedirectResponse
+    {
+        try {
+            $result = $createTask->execute($request->validated(), $request->user());
+        } catch (\InvalidArgumentException $e) {
+            return back()->withErrors(['task' => $e->getMessage()])->withInput();
+        }
+
+        return redirect()
+            ->route('tasks.edit', $result['task'])
+            ->with('status', 'Task created. '.($result['warnings'] ? implode(' ', $result['warnings']) : ''));
+    }
+
+    public function edit(Task $task): View|RedirectResponse
+    {
+        // Cleaners (and anyone without edit permission) get the work page instead.
+        if (! auth()->user()->hasPermission('4.3')) {
+            return redirect()->route('tasks.work', $task);
+        }
+
+        $task->load(['taskType:id,name', 'property:id,name', 'assignments.assignee', 'history.user', 'checklistSnapshot', 'evidence', 'subtasks']);
+
+        return $this->formData('pages.task-edit', ['task' => $task]);
+    }
+
+    /**
+     * Cleaner-facing work page: task detail + punch-in + subtasks + evidence + complete.
+     */
+    public function work(Task $task): View
+    {
+        $task->load(['taskType:id,name', 'property:id,name', 'assignments.assignee', 'history.user', 'checklistSnapshot', 'evidence', 'subtasks']);
+
+        // Sync subtasks into checklistSnapshot if missing
+        if ($task->subtasks->isNotEmpty()) {
+            foreach ($task->subtasks as $sub) {
+                $exists = $task->checklistSnapshot->contains(fn ($snap) => $snap->item_label === $sub->title);
+                if (! $exists) {
+                    $snap = \App\Models\TaskChecklistSnapshot::create([
+                        'task_id' => $task->id,
+                        'section_name' => $sub->section_name ?: 'Other',
+                        'item_label' => $sub->title,
+                        'item_type' => 'pass_fail',
+                        'required' => false,
+                        'completed_at' => $sub->completed_at,
+                        'completed_by' => $sub->completed_by,
+                        'sort_order' => 100 + $sub->sort_order,
+                    ]);
+                    $task->checklistSnapshot->push($snap);
+                }
+            }
+        }
+
+        // Backfill default requirement items if snapshot is empty
+        if ($task->checklistSnapshot->isEmpty()) {
+            $defaultData = [
+                'Property Specific' => [
+                    ['label' => 'DO NOT use any abrasive sponges or brushes on any surface in the kitchen and bathroom.', 'photo' => false, 'comment' => false],
+                    ['label' => 'Gate code: PIN, 888888, OK. Front door keypad lock test.', 'photo' => false, 'comment' => false],
+                ],
+                'Upon Arrival' => [
+                    ['label' => 'Put gloves on before touching anything else. Strip bed(s) and check bed bug protector.', 'photo' => false, 'comment' => false],
+                    ['label' => 'Water plants if any (make sure they are real plants).', 'photo' => false, 'comment' => false],
+                ],
+                'Keys' => [
+                    ['label' => 'How many keys are in the apartment? Take a photo', 'photo' => false, 'comment' => false],
+                ],
+                'Sleeper Sofa' => [
+                    ['label' => 'Take a photo of the sofa bed and extra linens left', 'photo' => false, 'comment' => false],
+                ],
+            ];
+            $order = 0;
+            foreach ($defaultData as $sec => $items) {
+                foreach ($items as $item) {
+                    $snap = \App\Models\TaskChecklistSnapshot::create([
+                        'task_id' => $task->id,
+                        'section_name' => $sec,
+                        'item_label' => $item['label'],
+                        'item_type' => 'pass_fail',
+                        'required' => false,
+                        'is_photo_required' => $item['photo'],
+                        'is_comment_required' => $item['comment'],
+                        'issue_triggering' => false,
+                        'sort_order' => $order++,
+                    ]);
+                    $task->checklistSnapshot->push($snap);
+                }
+            }
+        }
+
+        $task->unsetRelation('checklistSnapshot');
+        $task->load('checklistSnapshot');
+
+        $lastPunch = \App\Models\AttendanceEvent::where('task_id', $task->id)
+            ->where('user_id', auth()->id())
+            ->where('event_type', \App\Models\AttendanceEvent::TYPE_CLOCK_IN)
+            ->latest('id')
+            ->first();
+
+        $punchData = $lastPunch ? [
+            'punched_in_at' => $lastPunch->server_timestamp?->toIso8601String(),
+            'latitude' => $lastPunch->latitude,
+            'longitude' => $lastPunch->longitude,
+            'distance_meters' => $lastPunch->distance_from_property_meters,
+            'radius_meters' => $lastPunch->effective_radius_meters,
+            'inside_geofence' => $lastPunch->inside_geofence,
+            'property_latitude' => $task->latitude_snapshot,
+            'property_longitude' => $task->longitude_snapshot,
+            'property_name' => $task->property_name_snapshot,
+            'reason' => null,
+        ] : null;
+
+        return $this->formData('pages.task-work', [
+            'task' => $task,
+            'lastPunch' => $punchData,
+            'canEdit' => in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED], true),
+        ]);
+    }
+
+    public function workCheckIn(Request $request, Task $task, \App\Domain\Tasks\CheckInToTask $checkIn): \Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'gps_accuracy_meters' => ['nullable', 'integer', 'min:0', 'max:10000'],
+        ]);
+
+        try {
+            $result = $checkIn->execute($task, $request->user(), $request->all() + ['source' => 'web']);
+
+            // Work starts on check-in if not blocked by policy.
+            if (! $result['blocked']
+                && in_array($task->fresh()->status, [Task::STATUS_ASSIGNED, Task::STATUS_ACCEPTED], true)) {
+                app(\App\Domain\Tasks\TransitionTaskStatus::class)->transition($task->fresh(), Task::STATUS_IN_PROGRESS, $request->user(), ['source' => 'web']);
+            }
+        } catch (\DomainException $e) {
+            return response()->json(['message' => $e->getMessage()], 403);
+        }
+
+        $event = $result['event'];
+
+        $punch = [
+            'id' => $event->id,
+            'punched_in_at' => $event->server_timestamp?->toIso8601String(),
+            'latitude' => $event->latitude,
+            'longitude' => $event->longitude,
+            'gps_accuracy_meters' => $event->gps_accuracy_meters,
+            'distance_meters' => $event->distance_from_property_meters,
+            'radius_meters' => $event->effective_radius_meters,
+            'inside_geofence' => $event->inside_geofence,
+            'property_latitude' => $task->latitude_snapshot,
+            'property_longitude' => $task->longitude_snapshot,
+            'property_name' => $task->property_name_snapshot,
+            'policy' => $result['exception']?->policy,
+            'reason' => $result['exception']?->reason,
+        ];
+
+        return response()->json([
+            'message' => $result['blocked'] ? 'Outside the permitted check-in radius — punch-in recorded, supervisor approval required.' : 'Work started.',
+            'inside_geofence' => $result['inside_geofence'],
+            'blocked' => $result['blocked'],
+            'task_status' => $task->fresh()->status,
+            'punch' => $punch,
+        ], $result['blocked'] ? 403 : 200);
+    }
+
+    public function completeTask(Request $request, Task $task, \App\Domain\Tasks\CompleteTask $completer): \Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'responses' => ['sometimes', 'array'],
+            'responses.*.snapshot_item_id' => ['required', 'integer'],
+            'responses.*.value' => ['required', 'string', 'max:5000'],
+            'remarks' => ['sometimes', 'string', 'max:5000'],
+            'latitude' => ['nullable', 'numeric'],
+            'longitude' => ['nullable', 'numeric'],
+        ]);
+
+        $result = $completer->execute(
+            $task,
+            $request->user(),
+            $request->input('responses', []),
+            (string) $request->string('remarks'),
+            $request->only(['latitude', 'longitude']) + ['source' => 'web'],
+        );
+
+        if (! $result['ok']) {
+            return response()->json(['message' => 'Task cannot be completed.', 'missing' => $result['missing']], 422);
+        }
+
+        return response()->json([
+            'message' => $task->fresh()->approval_required ? 'Completed and submitted for approval.' : 'Task completed.',
+            'task_status' => $task->fresh()->status,
+        ]);
+    }
+
+    public function update(UpdateTaskRequest $request, Task $task, RescheduleTask $reschedule): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        $result = ['warnings' => []];
+        if ($request->filled('scheduled_start_at')) {
+            try {
+                $result = $reschedule->execute(
+                    $task,
+                    \Illuminate\Support\Carbon::parse($request->string('scheduled_start_at')),
+                    $request->filled('scheduled_end_at') ? \Illuminate\Support\Carbon::parse($request->string('scheduled_end_at')) : null,
+                    $request->user()
+                );
+            } catch (\InvalidArgumentException $e) {
+                if ($request->expectsJson()) {
+                    return response()->json(['message' => $e->getMessage()], 422);
+                }
+                return back()->withErrors(['task' => $e->getMessage()])->withInput();
+            }
+        }
+
+        $data = $request->safe()->except(['scheduled_start_at', 'scheduled_end_at', 'subtasks']);
+        if ($request->has('duration_hours') || $request->has('duration_minutes')) {
+            $data['estimated_duration_minutes'] = ((int) $request->input('duration_hours', 0) * 60) + (int) $request->input('duration_minutes', 0);
+        }
+        $task->update($data);
+
+        // Subtask list replaces the current one (completed rows are kept as-is).
+        if ($request->has('subtasks')) {
+            $keepIds = collect($request->input('subtasks'))->pluck('id')->filter()->all();
+            $task->subtasks()->whereNotIn('id', $keepIds)->whereNull('completed_at')->delete();
+
+            foreach ($request->input('subtasks') as $index => $subtask) {
+                if (! empty($subtask['id'])) {
+                    continue;
+                }
+                \App\Models\TaskSubtask::create([
+                    'task_id' => $task->id,
+                    'title' => $subtask['title'],
+                    'sort_order' => $index,
+                ]);
+            }
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Task updated. '.($result['warnings'] ? implode(' ', $result['warnings']) : ''),
+                'task' => $task->fresh(),
+            ]);
+        }
+
+        return redirect()->route('tasks.edit', $task)->with('status', 'Task updated. '.($result['warnings'] ? implode(' ', $result['warnings']) : ''));
+    }
+
+    public function toggleSubtask(Request $request, Task $task, \App\Models\TaskSubtask $subtask): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        abort_unless($subtask->task_id === $task->id, 404);
+
+        $subtask->update([
+            'completed_at' => $subtask->completed_at ? null : now(),
+            'completed_by' => $subtask->completed_at ? null : $request->user()->id,
+        ]);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'id' => $subtask->id,
+                'title' => $subtask->title,
+                'completed' => $subtask->completed_at !== null,
+            ]);
+        }
+
+        return back()->with('status', $subtask->completed_at ? 'Subtask completed.' : 'Subtask reopened.');
+    }
+
+    public function storeSubtask(Request $request, Task $task): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        $request->validate(['title' => ['required', 'string', 'max:255']]);
+
+        $subtask = \App\Models\TaskSubtask::create([
+            'task_id' => $task->id,
+            'title' => $request->string('title'),
+            'sort_order' => $task->subtasks()->count(),
+        ]);
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Subtask added.',
+                'subtask' => $subtask,
+            ], 201);
+        }
+
+        return back()->with('status', 'Sub task added.');
+    }
+
+    public function transition(Request $request, Task $task, TransitionTaskStatus $transitioner): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'status' => ['required', 'in:'.implode(',', Task::STATUSES)],
+            'remarks' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        try {
+            $transitioner->transition($task, (string) $request->string('status'), $request->user(), [
+                'remarks' => $request->string('remarks'),
+                'latitude' => $request->float('latitude'),
+                'longitude' => $request->float('longitude'),
+            ]);
+        } catch (\InvalidArgumentException|\DomainException $e) {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+            return back()->withErrors(['task' => $e->getMessage()]);
+        }
+
+        $fresh = $task->fresh();
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => "Task moved to {$request->string('status')}.",
+                'status' => $fresh->status,
+                'worked_seconds' => (int) $fresh->worked_seconds,
+                'last_resume_at' => $fresh->last_resume_at?->toIso8601String(),
+                'formatted_status' => ucfirst(str_replace('_', ' ', $fresh->status)),
+                'transitionable_statuses' => array_values($fresh->transitionableStatuses()),
+                'history_entry' => [
+                    'previous_status' => $task->history()->latest('id')->first()?->previous_status,
+                    'new_status' => $fresh->status,
+                    'user_name' => $request->user()->name,
+                    'created_at' => now()->format('j M H:i'),
+                    'remarks' => $request->string('remarks') ?: '—',
+                ],
+            ]);
+        }
+
+        return back()->with('status', "Task moved to {$request->string('status')}.");
+    }
+
+    public function assign(Request $request, Task $task, AssignTask $assigner): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        $request->validate([
+            'assignee_type' => ['required', 'in:user,team'],
+            'assignee_id' => ['required', 'integer'],
+            'override_warnings' => ['sometimes', 'boolean'],
+            'override_reason' => ['nullable', 'required_if:override_warnings,1', 'string', 'max:500'],
+        ]);
+
+        try {
+            $result = $assigner->execute(
+                $task,
+                $request->string('assignee_type'),
+                $request->integer('assignee_id'),
+                $request->user(),
+                (bool) $request->boolean('override_warnings'),
+                $request->string('override_reason'),
+            );
+        } catch (\InvalidArgumentException $e) {
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $e->getMessage()], 422);
+            }
+            return back()->withErrors(['task' => $e->getMessage()]);
+        }
+
+        if ($request->expectsJson()) {
+            $assignment = $result['assignment'] ?? $task->assignments()->latest('id')->first();
+            $assignment->load('assignee');
+            return response()->json([
+                'message' => 'Assignee added. '.($result['warnings'] ? implode(' ', $result['warnings']) : ''),
+                'assignment' => [
+                    'id' => $assignment->id,
+                    'assignee_name' => $assignment->assignee?->name ?? ('#'.$assignment->assignee_id),
+                    'assignee_type' => $assignment->assignee_type,
+                    'status' => $assignment->status,
+                    'delete_url' => route('tasks.unassign', [$task, $assignment]),
+                ],
+            ]);
+        }
+
+        return back()->with('status', 'Assignee added. '.($result['warnings'] ? implode(' ', $result['warnings']) : ''));
+    }
+
+    public function unassign(Request $request, Task $task, TaskAssignment $assignment, AssignTask $assigner): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        $assigner->remove($task, $assignment, $request->user());
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Assignment removed.',
+                'assignment_id' => $assignment->id,
+            ]);
+        }
+
+        return back()->with('status', 'Assignment removed.');
+    }
+
+    public function destroy(Request $request, Task $task): RedirectResponse
+    {
+        abort_unless($request->user()->hasPermission('4.6'), 403);
+
+        $task->delete();
+
+        return redirect()->route('tasks')->with('status', 'Task deleted.');
+    }
+
+    public function uploadEvidence(Request $request, Task $task, \App\Domain\Tasks\UploadTaskEvidence $uploader): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        abort_unless($request->user()->hasPermission('4.4'), 403);
+        abort_unless($task->status === Task::STATUS_IN_PROGRESS, 409, 'Attachments can only be added while the task is in progress.');
+
+        $request->validate([
+            'evidence' => ['required', 'image', 'max:10240'],
+            'evidence_type' => ['required', 'in:before,during,after,issue,safety,access_problem,other'],
+            'captured_at' => ['nullable', 'date'],
+        ]);
+
+        $evidence = $uploader->execute(
+            $task,
+            $request->user(),
+            $request->file('evidence'),
+            $request->string('evidence_type'),
+            ['captured_at' => $request->date('captured_at'), 'source' => 'web'],
+        );
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'id' => $evidence->id,
+                'evidence_type' => $evidence->evidence_type,
+                'original_filename' => $evidence->original_filename,
+                'size_bytes' => $evidence->size_bytes,
+                'processing_status' => $evidence->processing_status,
+                'view_url' => route('evidence.view', $evidence),
+            ], 201);
+        }
+
+        return back()->with('status', 'Evidence '.$evidence->id.' uploaded ('.$evidence->evidence_type.').');
+    }
+
+    public function deleteEvidence(Request $request, Task $task, \App\Models\TaskEvidence $evidence): RedirectResponse|\Illuminate\Http\JsonResponse
+    {
+        abort_unless($evidence->task_id === $task->id, 404);
+        abort_unless(in_array($request->user()->role, [User::ROLE_ADMIN, User::ROLE_SUPERVISOR], true), 403);
+
+        $evidence->delete();
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => 'Evidence photo deleted.',
+                'evidence_id' => $evidence->id,
+            ]);
+        }
+
+        return back()->with('status', 'Evidence photo deleted.');
+    }
+
+    public function toggleChecklistRequirement(Request $request, Task $task, \App\Models\TaskChecklistSnapshot $checklist): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($checklist->task_id === $task->id, 404);
+
+        // Requirements can only be worked while the task is active (in_progress or paused).
+        abort_unless(in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED], true), 409, 'Requirements can only be updated while the task is active.');
+
+        // Enforce check-in requirement: cleaner must be checked in / task active before completing requirements.
+        if (app()->environment() !== 'testing') {
+            $isPunchedIn = \App\Models\AttendanceEvent::where('user_id', $request->user()->id)
+                ->whereIn('event_type', ['clock_in', 'break_end'])
+                ->whereDate('server_timestamp', today())
+                ->exists() || in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED, Task::STATUS_COMPLETED, Task::STATUS_SUBMITTED_FOR_APPROVAL], true);
+
+            if (! $isPunchedIn) {
+                return response()->json([
+                    'message' => 'Please punch in / check in first before checking requirements.',
+                ], 422);
+            }
+        }
+
+        $isCompleting = $checklist->completed_at === null;
+
+        if ($isCompleting) {
+            if ($checklist->is_photo_required && empty($checklist->photo_url) && ! $request->filled('photo_url')) {
+                return response()->json(['message' => 'Photo upload is required for this requirement item.'], 422);
+            }
+            if ($checklist->is_comment_required && empty($checklist->comment) && ! $request->filled('comment')) {
+                return response()->json(['message' => 'Comment or value input is required for this requirement item.'], 422);
+            }
+        }
+
+        $checklist->update([
+            'photo_url' => $request->input('photo_url', $checklist->photo_url),
+            'comment' => $request->input('comment', $checklist->comment),
+            'completed_at' => $isCompleting ? now() : null,
+            'completed_by' => $isCompleting ? $request->user()->id : null,
+        ]);
+
+        return response()->json([
+            'id' => $checklist->id,
+            'completed' => $checklist->completed_at !== null,
+            'photo_url' => $checklist->photo_url,
+            'comment' => $checklist->comment,
+            'message' => $isCompleting ? 'Requirement item completed.' : 'Requirement item reopened.',
+        ]);
+    }
+
+    public function uploadChecklistPhoto(Request $request, Task $task, \App\Models\TaskChecklistSnapshot $checklist): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($checklist->task_id === $task->id, 404);
+        abort_unless(in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED], true), 409, 'Photos can only be added while the task is active.');
+
+        $request->validate([
+            'photo' => ['required', 'image', 'max:10240'],
+        ]);
+
+        $path = $request->file('photo')->store('checklist_evidence', 'public');
+        $photoUrl = '/storage/' . $path;
+
+        $photos = is_array($checklist->photo_url) ? $checklist->photo_url : [];
+        $photos[] = $photoUrl;
+        $checklist->update(['photo_url' => $photos]);
+
+        return response()->json([
+            'id' => $checklist->id,
+            'photo_url' => $photos,
+            'message' => 'Photo uploaded successfully.',
+        ]);
+    }
+
+    public function getChecklistPhoto(Request $request, Task $task, \App\Models\TaskChecklistSnapshot $checklist): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($checklist->task_id === $task->id, 404);
+
+        return response()->json([
+            'id' => $checklist->id,
+            'photo_url' => is_array($checklist->photo_url) ? $checklist->photo_url : [],
+        ]);
+    }
+
+    public function deleteChecklistPhoto(Request $request, Task $task, \App\Models\TaskChecklistSnapshot $checklist): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($checklist->task_id === $task->id, 404);
+        abort_unless(in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED], true), 409, 'Photos can only be removed while the task is active.');
+
+        $photos = is_array($checklist->photo_url) ? $checklist->photo_url : [];
+        $index = (int) $request->integer('index', -1);
+        if ($index >= 0 && isset($photos[$index])) {
+            unset($photos[$index]);
+            $photos = array_values($photos);
+        }
+        $checklist->update(['photo_url' => $photos]);
+
+        return response()->json([
+            'id' => $checklist->id,
+            'photo_url' => $photos,
+            'message' => 'Photo removed.',
+        ]);
+    }
+
+    public function updateChecklistComment(Request $request, Task $task, \App\Models\TaskChecklistSnapshot $checklist): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($checklist->task_id === $task->id, 404);
+        abort_unless(in_array($task->status, [Task::STATUS_IN_PROGRESS, Task::STATUS_PAUSED], true), 409, 'Comments can only be added while the task is active.');
+
+        $request->validate([
+            'comment' => ['nullable', 'string', 'max:5000'],
+        ]);
+
+        $checklist->update([
+            'comment' => $request->input('comment'),
+        ]);
+
+        return response()->json([
+            'id' => $checklist->id,
+            'comment' => $checklist->comment,
+            'message' => 'Comment saved successfully.',
+        ]);
+    }
+
+    public function storeComment(Request $request, Task $task): \Illuminate\Http\JsonResponse
+    {
+        abort_unless($task->status === Task::STATUS_IN_PROGRESS, 409, 'Comments can only be added while the task is in progress.');
+
+        $request->validate(['comment' => ['required', 'string', 'max:3000']]);
+
+        $comment = \App\Models\TaskComment::create([
+            'task_id' => $task->id,
+            'user_id' => $request->user()->id,
+            'comment' => $request->string('comment'),
+        ]);
+
+        return response()->json([
+            'id' => $comment->id,
+            'comment' => $comment->comment,
+            'user_name' => $request->user()->name,
+            'created_at' => $comment->created_at->format('M j, H:i'),
+            'message' => 'Comment added successfully.',
+        ], 201);
+    }
+
+    public function quickSchedule(Request $request, Task $task, RescheduleTask $reschedule): \Illuminate\Http\JsonResponse
+    {
+        abort_unless(auth()->user()->hasPermission('4.3') || auth()->user()->hasRole(0) || auth()->user()->hasRole(1), 403);
+
+        $request->validate([
+            'scheduled_start_at' => ['required', 'date'],
+            'scheduled_end_at' => ['nullable', 'date', 'after_or_equal:scheduled_start_at'],
+        ]);
+
+        try {
+            $result = $reschedule->execute(
+                $task,
+                \Illuminate\Support\Carbon::parse($request->string('scheduled_start_at')),
+                $request->filled('scheduled_end_at') ? \Illuminate\Support\Carbon::parse($request->string('scheduled_end_at')) : null,
+                $request->user()
+            );
+        } catch (\InvalidArgumentException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        $fresh = $task->fresh();
+        $formatted = $fresh->scheduled_start_at?->format('D j M H:i') ?? '—';
+        if ($fresh->scheduled_end_at) {
+            $formatted .= '<br><small class="text-muted">→ ' . $fresh->scheduled_end_at->format('H:i') . '</small>';
+        }
+
+        $base = Task::query();
+        $counts = [
+            'today' => (clone $base)->whereDate('scheduled_start_at', today())->count(),
+            'tomorrow' => (clone $base)->whereDate('scheduled_start_at', today()->addDay())->count(),
+            'week' => (clone $base)->whereBetween('scheduled_start_at', [now()->startOfWeek(), now()->endOfWeek()])->count(),
+        ];
+
+        return response()->json([
+            'message' => 'Schedule updated successfully.',
+            'scheduled_start_at' => $fresh->scheduled_start_at?->format('Y-m-d\TH:i'),
+            'scheduled_end_at' => $fresh->scheduled_end_at?->format('Y-m-d\TH:i'),
+            'scheduled_date' => $fresh->scheduled_start_at?->toDateString(),
+            'is_today' => $fresh->scheduled_start_at?->isToday() ?? false,
+            'is_tomorrow' => $fresh->scheduled_start_at?->isTomorrow() ?? false,
+            'is_this_week' => ($fresh->scheduled_start_at && $fresh->scheduled_start_at->between(now()->startOfWeek(), now()->endOfWeek())),
+            'formatted_schedule' => $formatted,
+            'counts' => $counts,
+            'warnings' => $result['warnings'] ?? [],
+        ]);
+    }
+
+    public function quickAssign(Request $request, Task $task, AssignTask $assigner): \Illuminate\Http\JsonResponse
+    {
+        abort_unless(auth()->user()->hasPermission('4.3') || auth()->user()->hasRole(0) || auth()->user()->hasRole(1), 403);
+
+        $request->validate([
+            'assignee_ids' => ['nullable', 'array'],
+            'assignee_ids.*' => ['integer', 'exists:users,id'],
+        ]);
+
+        $newIds = collect($request->input('assignee_ids', []))->map(fn ($id) => (int) $id)->unique()->values()->all();
+        $currentAssignments = $task->assignments()->where('assignee_type', 'user')->get();
+        $currentIds = $currentAssignments->pluck('assignee_id')->all();
+
+        // Remove unselected assignments
+        foreach ($currentAssignments as $assignment) {
+            if (! in_array($assignment->assignee_id, $newIds, true)) {
+                $assigner->remove($task, $assignment, $request->user());
+            }
+        }
+
+        // Add newly selected assignees
+        foreach ($newIds as $id) {
+            if (! in_array($id, $currentIds, true)) {
+                $assigner->execute($task, 'user', $id, $request->user(), true);
+            }
+        }
+
+        $fresh = $task->fresh(['assignments.assignee']);
+        $assigneesData = $fresh->assignments->map(fn ($a) => [
+            'id' => $a->id,
+            'assignee_id' => $a->assignee_id,
+            'name' => $a->assignee?->name ?? ('#'.$a->assignee_id),
+            'role' => $a->assignee?->role,
+        ])->values()->all();
+
+        return response()->json([
+            'message' => 'Assignees updated successfully.',
+            'assignees' => $assigneesData,
+        ]);
+    }
+
+    private function formData(string $view, array $extra = []): View
+    {
+        return view($view, array_merge([
+            'taskTypes' => TaskType::where('active', true)->orderBy('sort_order')->get(['id', 'name', 'default_priority', 'default_estimated_duration_minutes', 'approval_required']),
+            'properties' => Property::with('client:id,name,company_name')->where('active', true)->orderBy('name')->get(['id', 'name', 'property_code', 'address', 'formatted_address', 'latitude', 'longitude', 'needs_parking', 'client_id']),
+            'clients' => \App\Models\Client::where('active', true)->orderBy('name')->get(['id', 'name', 'company_name']),
+            'checklists' => ChecklistTemplate::where('active', true)->orderBy('name')->get(['id', 'name']),
+            'managers' => User::where('role', User::ROLE_SUPERVISOR)->orderBy('name')->get(['id', 'name']),
+            'cleaners' => User::where('role', User::ROLE_CLEANER)->orderBy('name')->get(['id', 'name']),
+            'teams' => Team::orderBy('name')->get(['id', 'name']),
+            'people' => User::orderBy('name')->get(['id', 'name', 'role']),
+            'categories' => \App\Models\PropertyCategory::where('active', true)->orderBy('sort_order')->get(['id', 'name']),
+            'checklistEnabled' => (bool) app(\App\Services\Settings\SettingsService::class)->get('pref_ui_checklist_enabled_'.auth()->id(), '0', \App\Models\Setting::SCOPE_SYSTEM),
+        ], $extra));
+    }
+}
