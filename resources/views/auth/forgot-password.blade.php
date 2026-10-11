@@ -1,51 +1,33 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Reset password — ScrubRoster Ops</title>
-    <link rel="icon" type="image/x-icon" href="{{ asset('favicon.ico') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('favicon-32x32.png') }}">
-    <link rel="shortcut icon" href="{{ asset('favicon.ico') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ asset('favicon-192x192.png') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
-    <link href="{{ versioned_asset('css/tokens.css') }}" rel="stylesheet">
-    <link href="{{ versioned_asset('css/components.css') }}" rel="stylesheet">
-</head>
-<body>
-    <main class="auth-form-side" style="min-height: 100vh">
-        <div class="auth-card">
-            <div class="card">
-                <div class="card-body p-4 p-md-5">
-                    <h1 class="h4 mb-1">Reset password</h1>
-                    <p class="eyebrow mb-4">Enter email — we send a link</p>
+@extends('layouts.auth')
 
-                    @if (session('status'))
-                        <div class="alert alert-success py-2" role="alert">{{ session('status') }}</div>
-                    @endif
-                    @if ($errors->any())
-                        <div class="alert alert-danger py-2" role="alert">{{ $errors->first() }}</div>
-                    @endif
+@section('title', 'Reset password')
+@section('auth-title-id', 'forgot-title')
 
-                    <form method="POST" action="{{ route('password.email') }}">
-                        @csrf
-                        <div class="mb-4">
-                            <label for="email" class="form-label">Email</label>
-                            <input type="email" id="email" name="email" class="form-control" value="{{ old('email') }}" required autofocus autocomplete="email">
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100 py-2">Send reset link</button>
-                    </form>
+@section('auth-form')
+<div class="auth-card-head">
+    <span class="eyebrow">Get back to your workspace</span>
+    <h1 id="forgot-title" class="auth-card-title">Reset your password</h1>
+    <p class="auth-card-intro">Enter your work email and we'll send you a link to choose a new password.</p>
+</div>
 
-                    <div class="mt-4 text-center">
-                        <a href="{{ route('login') }}" class="small text-decoration-none"><i class="bi bi-arrow-left me-1" aria-hidden="true"></i>Back to sign in</a>
-                    </div>
-                </div>
-            </div>
+@if (session('status'))
+    <div class="alert alert-success auth-alert py-2" role="alert">{{ session('status') }}</div>
+@endif
+@if ($errors->any())
+    <div class="alert alert-danger auth-alert py-2" role="alert" aria-live="assertive">{{ $errors->first() }}</div>
+@endif
+
+<form method="POST" action="{{ route('password.email') }}">
+    @csrf
+    <div class="mb-4">
+        <label for="email" class="form-label">Work email address</label>
+        <div class="auth-input">
+            <i class="bi bi-envelope" aria-hidden="true"></i>
+            <input type="email" id="email" name="email" class="form-control @error('email') is-invalid @enderror" value="{{ old('email') }}" placeholder="you@company.com" required autocomplete="email">
         </div>
-    </main>
-</body>
-</html>
+    </div>
+    <button type="submit" class="btn w-100 auth-submit">Send reset link<i class="bi bi-arrow-right" aria-hidden="true"></i></button>
+</form>
+
+<p class="auth-switch-link"><a href="{{ route('login') }}">Back to sign in</a></p>
+@endsection

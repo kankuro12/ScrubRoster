@@ -75,6 +75,6 @@ class TenantRegisterController extends Controller
         ]);
 
         return redirect()->route('dashboard', ['tenant' => $tenant->slug])
-            ->with('status', "Welcome to CleanWay Ops! Workspace '{$tenant->name}' has been created successfully.");
+            ->with('status', "Welcome to ScrubRoster! Workspace '{$tenant->name}' has been created successfully.");
     }
 }
