@@ -19,6 +19,7 @@ use Illuminate\Support\Str;
     'google_calendar_auto_sync', 'google_calendar_last_synced_at',
     'google_sheet_sync_enabled', 'google_sheet_url_or_id', 'google_sheet_auto_sync',
     'google_sheet_last_synced_at', 'google_sync_token',
+    'stripe_customer_id', 'stripe_subscription_id', 'stripe_status', 'stripe_cancel_at_period_end',
 ])]
 class Tenant extends Model
 {
@@ -37,6 +38,7 @@ class Tenant extends Model
             'google_sheet_sync_enabled' => 'boolean',
             'google_sheet_auto_sync' => 'boolean',
             'max_employees_override' => 'integer',
+            'stripe_cancel_at_period_end' => 'boolean',
         ];
     }
 

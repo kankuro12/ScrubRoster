@@ -42,4 +42,11 @@ return [
         'timeout' => (int) env('GOOGLE_PLACES_TIMEOUT', 8),
     ],
 
+    'stripe' => [
+        'secret' => env('STRIPE_SECRET'),
+        'webhook_secret' => env('STRIPE_WEBHOOK_SECRET'),
+        'portal_configuration' => env('STRIPE_PORTAL_CONFIGURATION'),
+        'currency' => 'USD',
+    ],
+
 ];

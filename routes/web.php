@@ -309,6 +309,8 @@ Route::middleware('auth')->prefix('admin')->group(function (): void {
     Route::get('/billing', [TenantBillingController::class, 'index'])->name('billing.index');
     Route::post('/billing/validate-coupon', [TenantBillingController::class, 'validateCoupon'])->name('billing.validate-coupon');
     Route::post('/billing/stripe', [TenantBillingController::class, 'processStripe'])->name('billing.stripe');
+    Route::get('/billing/stripe/success', [TenantBillingController::class, 'stripeSuccess'])->name('billing.stripe.success');
+    Route::get('/billing/stripe/cancel', [TenantBillingController::class, 'stripeCancel'])->name('billing.stripe.cancel');
     Route::post('/billing/paypal', [TenantBillingController::class, 'processPaypal'])->name('billing.paypal');
     Route::get('/billing/invoices/{payment}', [TenantBillingController::class, 'viewInvoice'])->name('billing.invoices.show');
     Route::post('/billing/invoices/{payment}/send', [TenantBillingController::class, 'sendInvoice'])->name('billing.invoices.send');

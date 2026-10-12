@@ -61,6 +61,16 @@ class TenantBillingController extends Controller
         return response()->json($result);
     }
 
+    public function stripeSuccess(): RedirectResponse
+    {
+        return redirect()->route('billing.index')->with('status', 'Stripe checkout submitted. Your plan activates after payment confirmation.');
+    }
+
+    public function stripeCancel(): RedirectResponse
+    {
+        return redirect()->route('billing.index')->with('status', 'Checkout was canceled. Your current plan is unchanged.');
+    }
+
     public function processStripe(Request $request, TenantContext $context, BillingService $billing): RedirectResponse
     {
         $tenant = $context->getTenant() ?? $request->user()?->tenant;

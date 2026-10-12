@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'tenant_id', 'package_id', 'coupon_id', 'payment_gateway',
     'gateway_transaction_id', 'invoice_number', 'amount', 'currency', 'billing_cycle',
     'status', 'metadata', 'invoice_sent_at', 'invoice_recipient_email',
+    'stripe_invoice_id', 'stripe_subscription_id', 'stripe_checkout_attempt_id',
 ])]
 class TenantPayment extends Model
 {
@@ -48,5 +49,10 @@ class TenantPayment extends Model
     public function coupon(): BelongsTo
     {
         return $this->belongsTo(Coupon::class);
+    }
+
+    public function stripeCheckoutAttempt(): BelongsTo
+    {
+        return $this->belongsTo(StripeCheckoutAttempt::class);
     }
 }
