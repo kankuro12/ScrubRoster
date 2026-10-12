@@ -1,6 +1,6 @@
 # Stripe recurring payments — reviewable design
 
-Date: 2026-10-12. Status: written design approved by the user; implementation has not started.
+Date: 2026-10-12. Status: approved and implemented; sandbox configuration remains a rollout prerequisite.
 
 Notebook: [ScrubRoster — Stripe Payments Integration](https://notebook.google.com/notebook/fe744f09-0f44-4bbb-a442-867d0f985765).
 
@@ -83,4 +83,4 @@ Run targeted billing tests, tenancy/auth regressions, Pint on changed PHP files,
 - [Official Stripe PHP SDK](https://github.com/stripe/stripe-php)
 - [Laravel Cashier](https://laravel.com/framework/docs/billing)
 
-Official pages were checked on 2026-10-12. NotebookLM imported Laravel documentation and two authored sources: the codebase audit and verified Stripe summaries. Direct Stripe URL imports failed. NotebookLM's initial analysis request did not return within the allotted wait and was stopped; no generated report is represented as completed. This document is the reviewed-by-agent proposal, not a claim of implemented code or live Stripe testing.
+Official pages were checked on 2026-10-12. NotebookLM imported Laravel documentation and two authored sources: the codebase audit and verified Stripe summaries. Direct Stripe URL entries appeared later, but the inspected webhook source had no indexed content. NotebookLM's initial analysis completed in the background and was saved as a research note. Its recommendations are reference only; this approved design overrides its proposed extra grace period, legacy-data rewrite and invented method names. An implementation/rollout guide and verification note are also saved in the notebook. No live Stripe payment was tested.

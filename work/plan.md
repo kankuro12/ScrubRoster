@@ -26,8 +26,9 @@ Web-first: each phase stabilizes before the next. API endpoints built alongside 
 | Attendance, GPS & Approval | [attendance-gps-approval](attendance-gps-approval/plan.md) | 4 | done |
 | Reports & Hardening | [reports](reports/plan.md) | 5 | done |
 | Firebase push | [firebase](firebase/plan.md) | infra | done (client-side SW pending) |
+| Stripe payment | [stripe-payment](stripe-payment/plan.md) | billing | implemented; full suite: 225 tests passed, 1 skipped; sandbox setup pending |
 
-All planned modules complete. Remaining work is deferred scope (Ionic, map view, import, mail/push channels) tracked per module in `future.md` / `docs/decisions-pending.md`.
+Original planned modules are complete. Stripe recurring payments are implemented and verified locally; deployment credentials, webhook/portal setup and a real sandbox payment remain prerequisites. Remaining deferred scope (Ionic, map view, import, mail/push channels) is tracked per module in `future.md` / `docs/decisions-pending.md`.
 
 Each module folder tracks its own `plan.md` (full plan), `current.md` (done/doing), `future.md` (deferred), `suggestion.md` (recommendations), `design.md` (architecture/schema).
 
