@@ -339,6 +339,26 @@
             </header>
 
             <main class="admin-content">
+                @php($__u = auth()->user())
+                @if($__u instanceof \Illuminate\Contracts\Auth\MustVerifyEmail && ! $__u->hasVerifiedEmail())
+                    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2 border-0 mb-3" role="status">
+                        <i class="bi bi-envelope-exclamation" aria-hidden="true"></i>
+                        <span class="flex-grow-1">Your email address is not verified. Please verify it to secure your account before the 30-day grace period ends.</span>
+                        <form method="POST" action="{{ route('verification.send') }}" class="m-0">
+                            @csrf
+                            <button type="submit" class="btn btn-sm btn-dark">Resend verification email</button>
+                        </form>
+                    </div>
+                @endif
+                @if(isset($currentTenant) && $currentTenant && $currentTenant->isOnTrial())
+                    <div class="alert alert-info d-flex flex-wrap align-items-center gap-2 border-0 mb-3" role="status">
+                        <i class="bi bi-hourglass-split" aria-hidden="true"></i>
+                        <span class="flex-grow-1">
+                            Free trial: <strong>{{ $currentTenant->getRemainingTrialDays() }} {{ \Illuminate\Support\Str::plural('day', $currentTenant->getRemainingTrialDays()) }} remaining</strong>@if($currentTenant->trial_ends_at) · ends {{ $currentTenant->trial_ends_at->format('M j, Y') }}@endif.
+                        </span>
+                        <a href="{{ route('billing.index') }}" class="btn btn-sm btn-dark">Upgrade plan</a>
+                    </div>
+                @endif
                 @yield('content')
             </main>
 

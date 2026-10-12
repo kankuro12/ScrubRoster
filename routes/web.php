@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\DeviceController;
 use App\Http\Controllers\Auth\ForgotPasswordController;
+use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\ResetPasswordController;
 use App\Http\Controllers\DashboardController;
@@ -68,8 +69,17 @@ Route::middleware('guest')->group(function (): void {
     Route::post('reset-password', [ResetPasswordController::class, 'reset'])->name('password.update');
 });
 
+// Email verification (authenticated, reachable while still unverified).
+Route::middleware('auth')->group(function (): void {
+    Route::get('email/verify', [EmailVerificationController::class, 'notice'])->name('verification.notice');
+    Route::get('email/verify/{id}/{hash}', [EmailVerificationController::class, 'verify'])
+        ->middleware(['signed', 'throttle:6,1'])->name('verification.verify');
+    Route::post('email/verification-notification', [EmailVerificationController::class, 'resend'])
+        ->middleware('throttle:6,1')->name('verification.send');
+});
+
 // Authenticated + permission-protected routes.
-Route::middleware('auth')->prefix('admin')->group(function (): void {
+Route::middleware(['auth', 'verify.grace'])->prefix('admin')->group(function (): void {
     Route::middleware('permission:4.1')->get('/dashboard', [DashboardController::class, 'dashboard'])->name('dashboard');
     Route::get('/search', [SearchController::class, 'index'])->name('search');
 

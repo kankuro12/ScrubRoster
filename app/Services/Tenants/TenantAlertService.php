@@ -74,23 +74,19 @@ class TenantAlertService
         $summary = [];
 
         foreach ($tenants as $tenant) {
-            // 1. Check Trial Status
+            // 1. Check Trial Status (reminders at 7, 3 and 1 days remaining).
             if ($tenant->subscription_status === 'trial') {
                 $daysRemaining = $tenant->getRemainingTrialDays();
 
-                if ($daysRemaining > 0 && $daysRemaining <= 3) {
-                    // Check if alert already sent in the last 48 hours
-                    $alreadySent = TenantAlert::where('tenant_id', $tenant->id)
-                        ->where('type', TenantAlert::TYPE_TRIAL_EXPIRING)
-                        ->where('created_at', '>=', now()->subHours(48))
-                        ->exists();
+                if ($daysRemaining > 0 && in_array($daysRemaining, [7, 3, 1], true)) {
+                    $title = "Free Trial Expiring in {$daysRemaining} Day" . ($daysRemaining === 1 ? '' : 's');
 
-                    if (! $alreadySent) {
+                    if (! $this->recentlySent($tenant, TenantAlert::TYPE_TRIAL_EXPIRING, $title)) {
                         $this->dispatchAlert(
                             $tenant,
                             TenantAlert::TYPE_TRIAL_EXPIRING,
-                            "Free Trial Expiring in {$daysRemaining} Days",
-                            "Your free evaluation trial for '{$tenant->name}' ends in {$daysRemaining} days. Upgrade to a commercial tier to keep Google Calendar feeds, Sheets sync, and mobile QR access active.",
+                            $title,
+                            "Your free evaluation trial for '{$tenant->name}' ends in {$daysRemaining} day" . ($daysRemaining === 1 ? '' : 's') . ". Upgrade to a commercial tier to keep Google Calendar feeds, Sheets sync, and mobile QR access active.",
                             TenantAlert::SEVERITY_WARNING,
                             route('billing.index'),
                             'Upgrade Subscription Plan',
@@ -100,16 +96,13 @@ class TenantAlertService
                         $summary[] = "{$tenant->name}: Trial expiring in {$daysRemaining}d alert sent";
                     }
                 } elseif ($daysRemaining === 0 && $tenant->trial_ends_at && $tenant->trial_ends_at->isPast()) {
-                    $alreadySent = TenantAlert::where('tenant_id', $tenant->id)
-                        ->where('type', TenantAlert::TYPE_TRIAL_EXPIRED)
-                        ->where('created_at', '>=', now()->subHours(72))
-                        ->exists();
+                    $title = 'Free Trial Expired — Immediate Action Required';
 
-                    if (! $alreadySent) {
+                    if (! $this->recentlySent($tenant, TenantAlert::TYPE_TRIAL_EXPIRED, $title, 3)) {
                         $this->dispatchAlert(
                             $tenant,
                             TenantAlert::TYPE_TRIAL_EXPIRED,
-                            "Free Trial Expired — Immediate Action Required",
+                            $title,
                             "Your evaluation trial has ended. Field dispatch, mobile badge check-in, and automated cloud sync are currently pending renewal. Select a fleet package to resume full operations.",
                             TenantAlert::SEVERITY_DANGER,
                             route('billing.index'),
@@ -118,6 +111,47 @@ class TenantAlertService
                         );
                         $dispatchedCount++;
                         $summary[] = "{$tenant->name}: Trial expired alert sent";
+                    }
+                }
+            }
+
+            // 1b. Check paid subscription renewal (reminders at 7, 3 and 1 days remaining).
+            if ($tenant->subscription_status === 'active' && $tenant->subscription_ends_at) {
+                $subDaysRemaining = max(0, (int) ceil(now()->diffInDays($tenant->subscription_ends_at, false)));
+
+                if ($subDaysRemaining > 0 && in_array($subDaysRemaining, [7, 3, 1], true)) {
+                    $title = "Subscription Renewal in {$subDaysRemaining} Day" . ($subDaysRemaining === 1 ? '' : 's');
+
+                    if (! $this->recentlySent($tenant, TenantAlert::TYPE_SUBSCRIPTION_RENEWAL, $title)) {
+                        $this->dispatchAlert(
+                            $tenant,
+                            TenantAlert::TYPE_SUBSCRIPTION_RENEWAL,
+                            $title,
+                            "Your {$tenant->billing_cycle} ScrubRoster subscription for '{$tenant->name}' renews in {$subDaysRemaining} day" . ($subDaysRemaining === 1 ? '' : 's') . " (on {$tenant->subscription_ends_at->format('M j, Y')}). Review your plan or update billing to avoid interruption.",
+                            TenantAlert::SEVERITY_WARNING,
+                            route('billing.index'),
+                            'Manage Subscription',
+                            true
+                        );
+                        $dispatchedCount++;
+                        $summary[] = "{$tenant->name}: Subscription renewing in {$subDaysRemaining}d alert sent";
+                    }
+                } elseif ($subDaysRemaining === 0 && $tenant->subscription_ends_at->isPast()) {
+                    $title = 'Subscription Expired — Renew to Continue';
+
+                    if (! $this->recentlySent($tenant, TenantAlert::TYPE_SUBSCRIPTION_RENEWAL, $title, 3)) {
+                        $this->dispatchAlert(
+                            $tenant,
+                            TenantAlert::TYPE_SUBSCRIPTION_RENEWAL,
+                            $title,
+                            "Your ScrubRoster subscription for '{$tenant->name}' has expired. Renew now to restore full field dispatch and sync operations.",
+                            TenantAlert::SEVERITY_DANGER,
+                            route('billing.index'),
+                            'Renew Subscription',
+                            true
+                        );
+                        $dispatchedCount++;
+                        $summary[] = "{$tenant->name}: Subscription expired alert sent";
                     }
                 }
             }
@@ -205,5 +239,18 @@ class TenantAlertService
             'dispatched_count' => $dispatchedCount,
             'summary' => $summary,
         ];
+    }
+
+    /**
+     * True when an identical alert (same type + title) was dispatched recently,
+     * so daily scans never spam the same reminder threshold.
+     */
+    private function recentlySent(Tenant $tenant, string $type, string $title, int $days = 20): bool
+    {
+        return TenantAlert::where('tenant_id', $tenant->id)
+            ->where('type', $type)
+            ->where('title', $title)
+            ->where('created_at', '>=', now()->subDays($days))
+            ->exists();
     }
 }

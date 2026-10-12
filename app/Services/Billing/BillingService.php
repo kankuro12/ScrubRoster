@@ -80,7 +80,7 @@ class BillingService
             ? 'ch_' . Str::random(24)
             : 'pi_test_' . Str::random(24);
 
-        return DB::transaction(function () use ($tenant, $package, $billingCycle, $coupon, $finalAmount, $txId, $paymentDetails) {
+        $payment = DB::transaction(function () use ($tenant, $package, $billingCycle, $coupon, $finalAmount, $txId, $paymentDetails) {
             $payment = TenantPayment::create([
                 'tenant_id' => $tenant->id,
                 'package_id' => $package->id,
