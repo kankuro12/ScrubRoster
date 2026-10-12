@@ -197,7 +197,10 @@ class Tenant extends Model
             return true;
         }
 
-        if ($this->subscription_status === 'active') {
+        if (in_array($this->subscription_status, ['active', 'past_due'], true)) {
+            if ($this->subscription_status === 'past_due' && ! $this->subscription_ends_at) {
+                return false;
+            }
             return ! $this->subscription_ends_at || $this->subscription_ends_at->isFuture();
         }
 

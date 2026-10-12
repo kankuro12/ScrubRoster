@@ -49,6 +49,8 @@ use Illuminate\Support\Facades\Route;
 // Public routes — marketing front website & auth
 Route::get('/', [FrontController::class, 'index'])->name('root');
 Route::get('/sitemap.xml', [FrontController::class, 'sitemap'])->name('sitemap');
+Route::post('/integrations/stripe/webhook', [\App\Http\Controllers\Web\StripeWebhookController::class, 'handle'])
+    ->withoutMiddleware(\App\Http\Middleware\ResolveTenant::class)->name('stripe.webhook');
 
 Route::get('login', [LoginController::class, 'showLoginForm'])->name('login');
 Route::post('login', [LoginController::class, 'login']);
