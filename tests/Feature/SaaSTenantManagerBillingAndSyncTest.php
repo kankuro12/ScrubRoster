@@ -6,6 +6,8 @@ use App\Models\Coupon;
 use App\Models\Package;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Billing\StripeGateway;
+use Database\Seeders\AdminUserSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -16,7 +18,7 @@ class SaaSTenantManagerBillingAndSyncTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        $this->seed(\Database\Seeders\AdminUserSeeder::class);
+        $this->seed(AdminUserSeeder::class);
     }
 
     public function test_front_website_is_publicly_accessible_with_packages(): void
@@ -25,7 +27,7 @@ class SaaSTenantManagerBillingAndSyncTest extends TestCase
 
         $response->assertOk()
             ->assertSee('ScrubRoster')
-            ->assertSee('Field-Ops SaaS')
+            ->assertSee('Scheduling & Attendance')
             ->assertSee('Starter Tier')
             ->assertSee('Growth Fleet');
     }
@@ -101,44 +103,21 @@ class SaaSTenantManagerBillingAndSyncTest extends TestCase
 
     public function test_tenant_admin_can_upgrade_via_stripe_with_coupon(): void
     {
+        config(['services.stripe.secret' => 'sk_test_placeholder', 'services.stripe.webhook_secret' => 'whsec_placeholder']);
         $tenant = Tenant::createWithSlug('Stripe Test Tenant', 'stripe-test');
-        $admin = User::factory()->create([
-            'tenant_id' => $tenant->id,
-            'role' => User::ROLE_ADMIN,
-        ]);
-
-        $growthPackage = Package::where('slug', 'growth')->first();
-        Coupon::create([
-            'code' => 'UPGRADE20',
-            'name' => '20% off',
-            'discount_type' => 'percentage',
-            'discount_value' => 20.00,
-            'is_active' => true,
-        ]);
-
-        $response = $this->actingAs($admin)->post(route('billing.stripe'), [
-            'package_id' => $growthPackage->id,
-            'billing_cycle' => 'monthly',
-            'coupon_code' => 'UPGRADE20',
-            'card_name' => 'John Clean',
-            'card_number' => '4242 4242 4242 4242',
-            'card_expiry' => '12/28',
-            'card_cvc' => '123',
-        ]);
-
-        $response->assertRedirect(route('billing.index'));
-
-        $tenant->refresh();
-        $this->assertEquals($growthPackage->id, $tenant->package_id);
-        $this->assertEquals('active', $tenant->subscription_status);
-        $this->assertEquals('stripe', $tenant->billing_provider);
-
-        $this->assertDatabaseHas('tenant_payments', [
-            'tenant_id' => $tenant->id,
-            'package_id' => $growthPackage->id,
-            'payment_gateway' => 'stripe',
-            'status' => 'completed',
-        ]);
+        $admin = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN]);
+        $package = Package::where('slug', 'growth')->firstOrFail();
+        Coupon::create(['code' => 'UPGRADE20', 'name' => '20% off', 'discount_type' => 'percentage', 'discount_value' => 20, 'is_active' => true]);
+        $gateway = $this->mock(StripeGateway::class);
+        $gateway->shouldReceive('customer')->once()->andReturn('cus_regression');
+        $gateway->shouldReceive('coupon')->once()->andReturn('coupon_regression');
+        $gateway->shouldReceive('checkout')->once()->andReturn(['id' => 'cs_test_regression', 'url' => 'https://checkout.stripe.com/regression']);
+        $this->actingAs($admin)->post(route('billing.stripe'), [
+            'package_id' => $package->id, 'billing_cycle' => 'monthly', 'coupon_code' => 'UPGRADE20',
+        ])->assertRedirect('https://checkout.stripe.com/regression');
+        $this->assertSame('trial', $tenant->fresh()->subscription_status);
+        $this->assertDatabaseCount('tenant_payments', 0);
+        $this->assertDatabaseHas('stripe_checkout_attempts', ['tenant_id' => $tenant->id, 'status' => 'open', 'total_amount' => 63.20]);
     }
 
     public function test_tenant_admin_can_checkout_via_paypal(): void

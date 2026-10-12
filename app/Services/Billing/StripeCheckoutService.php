@@ -18,6 +18,9 @@ class StripeCheckoutService
 
     public function start(Tenant $tenant, Package $package, string $cycle, ?string $couponCode, string $email): string
     {
+        if (! filled(config('services.stripe.secret')) || ! filled(config('services.stripe.webhook_secret'))) {
+            throw new \RuntimeException('Stripe payments and webhook confirmation must both be configured.');
+        }
         $couponCode = $couponCode ? strtoupper(trim($couponCode)) : null;
         $attempt = DB::transaction(function () use ($tenant, $package, $cycle, $couponCode, $email) {
             $tenant = Tenant::whereKey($tenant->id)->lockForUpdate()->firstOrFail();
@@ -31,6 +34,7 @@ class StripeCheckoutService
                 if ($existing->package_id !== $package->id || $existing->billing_cycle !== $cycle || ($existing->metadata['coupon_code'] ?? null) !== $couponCode) {
                     throw ValidationException::withMessages(['billing' => 'A checkout is already pending. Complete it or wait for Stripe to confirm its expiry.']);
                 }
+
                 return $existing;
             }
 
@@ -51,7 +55,8 @@ class StripeCheckoutService
             if ($coupon && $coupon->max_redemptions !== null) {
                 // Unknown remote outcomes stay reserved until a signed expiry or paid invoice resolves them.
                 $reserved = StripeCheckoutAttempt::withoutGlobalScopes()->where('coupon_id', $coupon->id)
-                    ->whereIn('status', ['creating', 'open', 'awaiting_payment'])->count();
+                    ->whereIn('status', ['creating', 'open', 'awaiting_payment'])
+                    ->lockForUpdate()->get(['id'])->count();
                 if ($coupon->redeemed_count + $reserved >= $coupon->max_redemptions) {
                     throw ValidationException::withMessages(['coupon_code' => 'All remaining coupon uses are reserved by pending checkouts.']);
                 }
@@ -67,7 +72,7 @@ class StripeCheckoutService
                     'coupon_code' => $couponCode, 'email' => $email,
                     'success_url' => route('billing.stripe.success'), 'cancel_url' => route('billing.stripe.cancel')],
             ]);
-        });
+        }, 3);
 
         if ($attempt->status === 'open') {
             if ($attempt->expires_at->isPast()) {
@@ -77,6 +82,7 @@ class StripeCheckoutService
                     throw ValidationException::withMessages(['billing' => 'Your previous checkout expired. Please select your plan again.']);
                 }
             }
+
             return $attempt->metadata['checkout_url'];
         }
         if ($attempt->expires_at->isPast()) {

@@ -4,16 +4,24 @@ namespace App\Jobs;
 
 use App\Models\TenantPayment;
 use App\Services\Billing\InvoiceService;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
-class SendTenantPaymentInvoice implements ShouldQueue
+class SendTenantPaymentInvoice implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
     public $tries = 3;
+
+    public $uniqueFor = 3600;
+
+    public function uniqueId(): string
+    {
+        return (string) $this->paymentId;
+    }
 
     public function backoff(): array
     {

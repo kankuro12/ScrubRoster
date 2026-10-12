@@ -31,6 +31,7 @@ class StripeWebhookController extends Controller
             $service->handle($event->toArray());
         } catch (DomainException $e) {
             report($e);
+
             return response()->json(['error' => 'Stripe event does not match local billing records.'], 422);
         }
 

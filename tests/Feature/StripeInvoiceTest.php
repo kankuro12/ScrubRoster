@@ -13,6 +13,7 @@ use App\Services\Billing\InvoiceService;
 use App\Services\Tenancy\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class StripeInvoiceTest extends TestCase
@@ -24,6 +25,7 @@ class StripeInvoiceTest extends TestCase
         $tenant = Tenant::createWithSlug('Invoice customer', 'invoice-customer');
         User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN, 'status' => 'active', 'email' => 'billing@example.test']);
         $coupon = Coupon::create(['code' => 'INVOICE20', 'name' => 'Invoice discount', 'discount_type' => 'percentage', 'discount_value' => 20, 'is_active' => true]);
+
         return TenantPayment::create(['tenant_id' => $tenant->id, 'package_id' => Package::where('slug', 'growth')->first()->id,
             'coupon_id' => $coupon->id, 'payment_gateway' => 'stripe', 'gateway_transaction_id' => 'in_snapshot',
             'stripe_invoice_id' => 'in_snapshot', 'amount' => 63.20, 'currency' => 'USD', 'billing_cycle' => 'monthly',
@@ -69,5 +71,14 @@ class StripeInvoiceTest extends TestCase
         }
         $this->assertSame('completed', $payment->fresh()->status);
         $this->assertDatabaseCount('tenant_payments', 1);
+    }
+
+    public function test_pending_invoice_delivery_can_be_recovered_after_queue_failure(): void
+    {
+        Queue::fake();
+        $payment = $this->payment();
+        $this->artisan('billing:retry-stripe-invoices')->assertSuccessful();
+        $this->artisan('billing:retry-stripe-invoices')->assertSuccessful();
+        Queue::assertPushed(SendTenantPaymentInvoice::class, 1);
     }
 }

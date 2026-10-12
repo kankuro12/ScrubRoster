@@ -27,6 +27,7 @@ class StripeWebhookService
             'invoice.payment_failed', 'customer.subscription.updated', 'customer.subscription.deleted'];
         if (! in_array($type, $handled, true)) {
             $this->recordEvent($event);
+
             return;
         }
 
@@ -37,6 +38,7 @@ class StripeWebhookService
             $subscriptionId = $this->id(data_get($invoice, 'parent.subscription_details.subscription') ?? ($invoice['subscription'] ?? null));
             if (! $subscriptionId) {
                 $this->recordEvent($event);
+
                 return;
             }
             $subscription = $this->gateway->subscription($subscriptionId);
@@ -53,6 +55,7 @@ class StripeWebhookService
         if (! $attempt) {
             // Events belonging to another Stripe integration have no local entitlement effect.
             $this->recordEvent($event);
+
             return;
         }
 
@@ -61,6 +64,10 @@ class StripeWebhookService
             if (StripeWebhookEvent::whereKey($event['id'])->exists()) {
                 return;
             }
+            // Match checkout's tenant -> coupon -> attempt order before locking reservation rows.
+            if ($attempt->coupon_id) {
+                Coupon::whereKey($attempt->coupon_id)->lockForUpdate()->firstOrFail();
+            }
             $attempt = StripeCheckoutAttempt::withoutGlobalScopes()->whereKey($attempt->id)->lockForUpdate()->firstOrFail();
             if ($type === 'checkout.session.expired') {
                 $this->assertSession($object, $attempt, $tenant);
@@ -68,6 +75,7 @@ class StripeWebhookService
                     $attempt->update(['status' => 'expired', 'stripe_session_id' => $object['id']]);
                 }
                 $this->recordEvent($event);
+
                 return;
             }
             if (! $subscriptionId) {
@@ -77,10 +85,21 @@ class StripeWebhookService
             // Fetch after acquiring the tenant lock: competing event processors cannot apply an older read.
             $subscription = $this->gateway->subscription($subscriptionId);
             $this->assertSubscription($subscription, $attempt, $tenant);
+            if ($invoice && $this->id($invoice['customer'] ?? null) !== $tenant->stripe_customer_id) {
+                throw new DomainException('Invoice customer does not match the tenant.');
+            }
             if ($tenant->stripe_subscription_id && $tenant->stripe_subscription_id !== $subscriptionId) {
                 if (! in_array($tenant->stripe_status, ['canceled', 'incomplete_expired'], true)
                     || ! in_array($attempt->status, ['creating', 'open', 'awaiting_payment'], true)) {
+                    // Preserve accounting for old paid invoices without changing the replacement subscription.
+                    if ($type === 'invoice.paid' && ($invoice['status'] ?? null) === 'paid') {
+                        $payment = $this->recordInvoice($invoice, $subscriptionId, $attempt, $tenant, false);
+                        if ($payment) {
+                            SendTenantPaymentInvoice::dispatch($payment->id)->afterCommit();
+                        }
+                    }
                     $this->recordEvent($event);
+
                     return;
                 }
             }
@@ -93,9 +112,6 @@ class StripeWebhookService
 
             $payment = null;
             if ($invoice) {
-                if ($this->id($invoice['customer'] ?? null) !== $tenant->stripe_customer_id) {
-                    throw new DomainException('Invoice customer does not match the tenant.');
-                }
                 if ($type === 'invoice.paid' && ($invoice['status'] ?? null) === 'paid') {
                     $payment = $this->recordInvoice($invoice, $subscriptionId, $attempt, $tenant);
                 }
@@ -104,6 +120,11 @@ class StripeWebhookService
             $hasPaid = TenantPayment::withoutGlobalScopes()->where('tenant_id', $tenant->id)
                 ->where('stripe_subscription_id', $subscriptionId)->where('status', 'completed')->exists();
             $status = $subscription['status'];
+            if (! $hasPaid && in_array($status, ['canceled', 'incomplete_expired'], true)
+                && data_get($subscription, 'latest_invoice.status') !== 'paid'
+                && in_array($attempt->status, ['creating', 'open', 'awaiting_payment'], true)) {
+                $attempt->update(['status' => 'failed']);
+            }
             $updates = ['stripe_subscription_id' => $subscriptionId, 'stripe_status' => $status,
                 'stripe_cancel_at_period_end' => (bool) ($subscription['cancel_at_period_end'] ?? false) || ! empty($subscription['cancel_at'])];
             if ($hasPaid) {
@@ -124,10 +145,10 @@ class StripeWebhookService
             if ($payment) {
                 SendTenantPaymentInvoice::dispatch($payment->id)->afterCommit();
             }
-        });
+        }, 3);
     }
 
-    protected function recordInvoice(array $invoice, string $subscriptionId, StripeCheckoutAttempt $attempt, Tenant $tenant): ?TenantPayment
+    protected function recordInvoice(array $invoice, string $subscriptionId, StripeCheckoutAttempt $attempt, Tenant $tenant, bool $grantAccess = true): ?TenantPayment
     {
         if (TenantPayment::withoutGlobalScopes()->where('stripe_invoice_id', $invoice['id'])->exists()) {
             return null;
@@ -162,8 +183,8 @@ class StripeWebhookService
         }
         $attempt->status = 'completed';
         $attempt->save();
-        if (! $tenant->subscription_ends_at || $end->greaterThan($tenant->subscription_ends_at)
-            || $tenant->billing_provider !== 'stripe' || $tenant->billing_subscription_id !== $subscriptionId) {
+        if ($grantAccess && (! $tenant->subscription_ends_at || $end->greaterThan($tenant->subscription_ends_at)
+            || $tenant->billing_provider !== 'stripe' || $tenant->billing_subscription_id !== $subscriptionId)) {
             $tenant->update(['package_id' => $attempt->package_id, 'billing_cycle' => $attempt->billing_cycle,
                 'subscription_ends_at' => $end]);
         }

@@ -169,3 +169,17 @@
   --bs-body-line-height: 1.5;
 }
 .dark{ --cw-canvas:#0F172A; --cw-surface:#1E293B; --cw-surface-2:#334155; --cw-border:#334155; --cw-border-strong:#475569; --cw-text:#E2E8F0; --cw-text-strong:#F8FAFC; --cw-muted:#94A3B8; }
+
+/* Billing uses the existing field-operations theme without changing other admin pages. */
+.billing-page {
+  --cw-text-md: .9375rem;
+  --cw-text-caption: .6875rem;
+  --cw-accent: var(--cw-front-highlight);
+  --cw-accent-hover: var(--cw-front-highlight-hover);
+  --cw-accent-ink: var(--cw-ink-900);
+  --cw-accent-deep: var(--cw-front-action);
+  --cw-accent-tint: var(--cw-front-accent-tint);
+  --cw-radius-md: var(--cw-front-radius);
+  --cw-success: var(--cw-front-success-text);
+  --cw-warning: var(--cw-front-warning-text);
+}

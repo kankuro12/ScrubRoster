@@ -10,3 +10,6 @@ Artisan::command('inspire', function () {
 
 // Recurring task instances are generated 30 days ahead, nightly.
 Schedule::command('tasks:generate-recurring --days=30')->dailyAt('02:00');
+
+// Recover invoice delivery even if queue dispatch failed after a paid webhook committed.
+Schedule::command('billing:retry-stripe-invoices')->hourly()->withoutOverlapping();

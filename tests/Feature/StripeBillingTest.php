@@ -2,34 +2,41 @@
 
 namespace Tests\Feature;
 
+use App\Models\Coupon;
+use App\Models\Package;
+use App\Models\StripeCheckoutAttempt;
 use App\Models\Tenant;
 use App\Models\TenantPayment;
-use App\Models\Package;
-use App\Models\Coupon;
-use App\Models\StripeCheckoutAttempt;
 use App\Models\User;
 use App\Services\Billing\StripeCheckoutService;
 use App\Services\Billing\StripeGateway;
-use Illuminate\Validation\ValidationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
+use Stripe\StripeClient;
 use Tests\TestCase;
 
 class StripeBillingTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.stripe.secret' => 'sk_test_placeholder', 'services.stripe.webhook_secret' => 'whsec_placeholder']);
+    }
+
     public function test_gateway_constructs_supported_sdk_client(): void
     {
         config(['services.stripe.secret' => 'sk_test_placeholder']);
         $gateway = new class extends StripeGateway
         {
-            public function sdk(): \Stripe\StripeClient
+            public function sdk(): StripeClient
             {
                 return $this->client();
             }
         };
-        $this->assertInstanceOf(\Stripe\StripeClient::class, $gateway->sdk());
+        $this->assertInstanceOf(StripeClient::class, $gateway->sdk());
     }
 
     public function test_real_stripe_ids_are_distinct_from_simulated_history(): void
@@ -65,6 +72,7 @@ class StripeBillingTest extends TestCase
             $this->assertSame(7900, $params['line_items'][0]['price_data']['unit_amount']);
             $this->assertSame('month', $params['line_items'][0]['price_data']['recurring']['interval']);
             $this->assertSame((string) $tenant->id, $params['subscription_data']['metadata']['tenant_id']);
+
             return true;
         })->andReturn(['id' => 'cs_test_checkout', 'url' => 'https://checkout.stripe.com/test']);
         $url = app(StripeCheckoutService::class)->start($tenant, $package, 'monthly', 'FIRST20', 'admin@example.test');
@@ -88,6 +96,7 @@ class StripeBillingTest extends TestCase
             if (count($requests) === 1) {
                 throw new \RuntimeException('Remote response timed out');
             }
+
             return ['id' => 'cs_test_retry', 'url' => 'https://checkout.stripe.com/retry'];
         });
         try {
@@ -139,5 +148,72 @@ class StripeBillingTest extends TestCase
         $this->actingAs($admin)->get('/admin/billing/stripe/success')->assertRedirect(route('billing.index'));
         $this->assertSame('trial', $tenant->fresh()->subscription_status);
         $this->assertSame(0, TenantPayment::withoutGlobalScopes()->count());
+    }
+
+    public function test_browser_starts_hosted_checkout_without_card_details(): void
+    {
+        config(['services.stripe.secret' => 'sk_test_placeholder']);
+        $tenant = Tenant::createWithSlug('Browser', 'browser');
+        $admin = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN]);
+        $this->mock(StripeCheckoutService::class)->shouldReceive('start')->once()->andReturn('https://checkout.stripe.com/browser');
+        $this->actingAs($admin)->post(route('billing.stripe'), ['package_id' => Package::first()->id, 'billing_cycle' => 'monthly'])
+            ->assertRedirect('https://checkout.stripe.com/browser');
+        $this->assertSame('trial', $tenant->fresh()->subscription_status);
+    }
+
+    public function test_cleaner_cannot_change_billing(): void
+    {
+        $tenant = Tenant::createWithSlug('Cleaner', 'cleaner-billing');
+        $cleaner = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_CLEANER]);
+        $this->actingAs($cleaner)->post(route('billing.stripe'), ['package_id' => Package::first()->id, 'billing_cycle' => 'monthly'])->assertForbidden();
+    }
+
+    public function test_canceled_stripe_tenant_cannot_restore_access_through_simulated_paypal(): void
+    {
+        $tenant = Tenant::createWithSlug('Canceled', 'canceled-paypal');
+        $tenant->update(['stripe_customer_id' => 'cus_canceled', 'stripe_subscription_id' => 'sub_canceled',
+            'stripe_status' => 'canceled', 'subscription_status' => 'canceled']);
+        $admin = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN]);
+        $this->actingAs($admin)->post(route('billing.paypal'), ['package_id' => Package::first()->id, 'billing_cycle' => 'monthly'])
+            ->assertSessionHasErrors('billing');
+        $this->assertSame('canceled', $tenant->fresh()->subscription_status);
+        $this->assertSame(0, TenantPayment::withoutGlobalScopes()->count());
+    }
+
+    public function test_platform_admin_requires_selected_tenant_for_checkout(): void
+    {
+        $admin = User::factory()->create(['tenant_id' => null, 'role' => User::ROLE_ADMIN]);
+        $this->actingAs($admin)->post(route('billing.stripe'), ['package_id' => Package::first()->id, 'billing_cycle' => 'monthly'])->assertForbidden();
+    }
+
+    public function test_portal_uses_only_authenticated_tenant_customer(): void
+    {
+        $tenant = Tenant::createWithSlug('Portal', 'portal');
+        $tenant->update(['stripe_customer_id' => 'cus_portal']);
+        $admin = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN]);
+        $this->mock(StripeGateway::class)->shouldReceive('portal')->once()->with('cus_portal', route('billing.index'))->andReturn('https://billing.stripe.com/portal');
+        $this->actingAs($admin)->post('/admin/billing/stripe/portal', ['customer_id' => 'cus_foreign'])->assertRedirect('https://billing.stripe.com/portal');
+    }
+
+    public function test_billing_page_has_no_raw_card_fields(): void
+    {
+        $tenant = Tenant::createWithSlug('Secure form', 'secure-form');
+        $admin = User::factory()->create(['tenant_id' => $tenant->id, 'role' => User::ROLE_ADMIN]);
+        $this->actingAs($admin)->get(route('billing.index'))->assertOk()
+            ->assertDontSee('name="card_number"', false)->assertDontSee('name="card_cvc"', false)
+            ->assertSee('renews automatically');
+    }
+
+    public function test_tenant_admin_cannot_send_another_tenants_invoice(): void
+    {
+        $own = Tenant::createWithSlug('Own', 'own-invoice');
+        $other = Tenant::createWithSlug('Other', 'other-invoice');
+        $admin = User::factory()->create(['tenant_id' => $own->id, 'role' => User::ROLE_ADMIN]);
+        $payment = TenantPayment::create(['tenant_id' => $other->id, 'package_id' => Package::first()->id,
+            'payment_gateway' => 'stripe', 'gateway_transaction_id' => 'in_foreign', 'amount' => 29,
+            'currency' => 'USD', 'billing_cycle' => 'monthly', 'status' => 'completed']);
+        $response = $this->actingAs($admin)->post(route('billing.invoices.send', $payment));
+        $this->assertContains($response->status(), [403, 404]);
+        $this->assertNull($payment->fresh()->invoice_sent_at);
     }
 }

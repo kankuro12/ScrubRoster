@@ -6,7 +6,6 @@ use App\Mail\TenantInvoiceMail;
 use App\Models\Tenant;
 use App\Models\TenantAlert;
 use App\Models\TenantPayment;
-use App\Models\User;
 use App\Scopes\TenantScope;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -60,6 +59,7 @@ class InvoiceService
     {
         return DB::transaction(function () use ($payment, $recipientEmail): bool {
             $locked = TenantPayment::withoutGlobalScopes()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
+
             return $this->deliverInvoice($locked, $recipientEmail);
         });
     }
@@ -88,6 +88,7 @@ class InvoiceService
 
         if (! $recipient) {
             Log::warning("Invoice #{$payment->invoice_number} could not be sent: no active admin email found for tenant {$tenant->id}");
+
             return false;
         }
 
@@ -114,7 +115,8 @@ class InvoiceService
 
             return true;
         } catch (\Throwable $e) {
-            Log::error("Failed sending invoice email to {$recipient}: " . $e->getMessage());
+            Log::error("Failed sending invoice email to {$recipient}: ".$e->getMessage());
+
             return false;
         }
     }

@@ -33,7 +33,7 @@ class TenantPayment extends Model
             return $this->invoice_number;
         }
 
-        return 'INV-' . date('Y') . '-' . str_pad((string) $this->id, 5, '0', STR_PAD_LEFT);
+        return 'INV-'.date('Y').'-'.str_pad((string) $this->id, 5, '0', STR_PAD_LEFT);
     }
 
     public function tenant(): BelongsTo

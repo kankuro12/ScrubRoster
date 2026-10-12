@@ -13,6 +13,7 @@ use App\Services\Tenancy\TenantContext;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Illuminate\Testing\TestResponse;
 use Tests\TestCase;
 
 class StripeWebhookTest extends TestCase
@@ -20,9 +21,13 @@ class StripeWebhookTest extends TestCase
     use RefreshDatabase;
 
     private Tenant $tenant;
+
     private StripeCheckoutAttempt $attempt;
+
     private Coupon $coupon;
+
     private array $subscription;
+
     private array $invoice;
 
     protected function setUp(): void
@@ -55,11 +60,12 @@ class StripeWebhookTest extends TestCase
         $gateway->shouldReceive('invoice')->andReturnUsing(fn () => $this->invoice);
     }
 
-    private function event(string $type = 'invoice.paid', string $id = 'evt_initial', ?array $object = null): \Illuminate\Testing\TestResponse
+    private function event(string $type = 'invoice.paid', string $id = 'evt_initial', ?array $object = null): TestResponse
     {
         $payload = json_encode(['id' => $id, 'object' => 'event', 'type' => $type, 'data' => ['object' => $object ?? $this->invoice]], JSON_THROW_ON_ERROR);
         $timestamp = time();
         $signature = hash_hmac('sha256', $timestamp.'.'.$payload, 'whsec_fixture');
+
         return $this->call('POST', '/integrations/stripe/webhook', [], [], [],
             ['CONTENT_TYPE' => 'application/json', 'HTTP_STRIPE_SIGNATURE' => "t=$timestamp,v1=$signature"], $payload);
     }
@@ -188,6 +194,39 @@ class StripeWebhookTest extends TestCase
         $this->event('checkout.session.expired', 'evt_expired', ['id' => 'cs_test_fixture',
             'customer' => 'cus_fixture', 'metadata' => $this->subscription['metadata']])->assertOk();
         $this->assertSame('expired', $this->attempt->fresh()->status);
+        $this->assertSame('trial', $this->tenant->fresh()->subscription_status);
+    }
+
+    public function test_late_paid_invoice_for_retired_subscription_is_recorded_without_replacing_current_access(): void
+    {
+        $this->event()->assertOk();
+        $paidThrough = now()->addDays(60)->startOfSecond();
+        $this->tenant->update(['stripe_subscription_id' => 'sub_replacement', 'stripe_status' => 'active',
+            'billing_subscription_id' => 'sub_replacement', 'subscription_ends_at' => $paidThrough]);
+        $this->subscription['status'] = 'canceled';
+        $this->invoice['id'] = 'in_retired_late';
+        $this->invoice['billing_reason'] = 'subscription_cycle';
+        $this->invoice['total'] = $this->invoice['amount_paid'] = 7900;
+        $this->invoice['total_discount_amounts'] = [];
+        $this->invoice['lines']['data'][0]['period']['end'] = now()->addDays(90)->timestamp;
+        $this->event('invoice.paid', 'evt_retired_late')->assertOk();
+        $this->event('invoice.paid', 'evt_retired_replay')->assertOk();
+        $this->assertDatabaseCount('tenant_payments', 2);
+        $this->assertSame('sub_replacement', $this->tenant->fresh()->stripe_subscription_id);
+        $this->assertTrue($this->tenant->fresh()->subscription_ends_at->equalTo($paidThrough));
+        $this->assertSame(1, $this->coupon->fresh()->redeemed_count);
+    }
+
+    public function test_unpaid_terminal_subscription_releases_coupon_reservation(): void
+    {
+        $this->subscription['status'] = 'incomplete';
+        $this->subscription['latest_invoice']['status'] = 'open';
+        $this->event('checkout.session.completed', 'evt_incomplete', ['id' => 'cs_test_fixture',
+            'customer' => 'cus_fixture', 'subscription' => 'sub_fixture', 'metadata' => $this->subscription['metadata']])->assertOk();
+        $this->subscription['status'] = 'incomplete_expired';
+        $this->event('customer.subscription.updated', 'evt_terminal', $this->subscription)->assertOk();
+        $this->assertSame('failed', $this->attempt->fresh()->status);
+        $this->assertSame(0, $this->coupon->fresh()->redeemed_count);
         $this->assertSame('trial', $this->tenant->fresh()->subscription_status);
     }
 }

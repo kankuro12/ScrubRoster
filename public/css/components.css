@@ -1787,3 +1787,16 @@ a:focus-visible,button:focus-visible,.form-control:focus-visible{ outline:2px so
   .front-body *{ scroll-behavior:auto !important; }
   .public-auth-body .auth-submit,.public-auth-body .auth-input-toggle,.public-auth-body .form-control{ transition:none; }
 }
+
+/* Stripe subscription screens reuse Bootstrap and the existing theme tokens. */
+.billing-page { font-family: var(--cw-font-display); font-size: var(--cw-text-md); line-height: 1.6; }
+.billing-page h1, .billing-page h2, .billing-page .h3, .billing-page .h4 { font-family: var(--cw-font-display); font-weight: 900; letter-spacing: -.02em; }
+.billing-page .card-header, .billing-page .table thead, .billing-page .status-badge { font-family: var(--cw-font-mono); font-size: var(--cw-text-caption); letter-spacing: .12em; }
+.billing-page .card, .billing-page .modal-content { background: var(--cw-surface); color: var(--cw-text); border-color: var(--cw-border); border-radius: var(--cw-radius-md); }
+.billing-page .btn-primary {
+  --bs-btn-color: var(--cw-accent-ink); --bs-btn-bg: var(--cw-accent); --bs-btn-border-color: var(--cw-accent);
+  --bs-btn-hover-color: var(--cw-accent-ink); --bs-btn-hover-bg: var(--cw-accent-hover); --bs-btn-hover-border-color: var(--cw-accent-hover);
+  --bs-btn-active-color: var(--cw-accent-ink); --bs-btn-active-bg: var(--cw-accent-hover); --bs-btn-active-border-color: var(--cw-accent-hover);
+  --bs-btn-disabled-color: var(--cw-accent-ink); --bs-btn-disabled-bg: var(--cw-accent); --bs-btn-disabled-border-color: var(--cw-accent);
+}
+.billing-page :focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }
