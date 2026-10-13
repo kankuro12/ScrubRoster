@@ -6,7 +6,9 @@
     <nav class="navbar navbar-expand-lg front-nav" aria-label="Main navigation">
         <div class="container">
             <a class="front-brand" href="{{ route('root') }}" aria-label="ScrubRoster home">
-                <img src="{{ asset('logo.jpg') }}" width="40" height="40" alt="">
+                <span class="front-brand-mark" aria-hidden="true">
+                    <img src="{{ asset('logo.jpg') }}" width="1024" height="1024" alt="">
+                </span>
                 <span><span class="front-brand-name">ScrubRoster</span><span class="front-brand-tag">Field operations</span></span>
             </a>
             <div class="front-nav-actions order-lg-3">

@@ -94,6 +94,8 @@
   --cw-front-gutter: clamp(var(--cw-space-md), 4vw, var(--cw-space-10));
   --cw-front-section-space: clamp(48px, 6vw, 104px);
   --cw-front-nav-height: 76px;
+  --cw-front-brand-size: var(--cw-space-xxl);
+  --cw-front-brand-size-mobile: 40px;
   --cw-front-hero-space: clamp(32px, 5vw, 80px);
   --cw-front-hero-compact-space: clamp(var(--cw-space-lg), 4svh, var(--cw-space-xxl));
   --cw-front-hero-title-size: clamp(2.625rem, 6.8vw, 6rem);
