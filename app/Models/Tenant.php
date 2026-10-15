@@ -6,8 +6,8 @@ use App\Support\Auditable;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Str;
 
@@ -19,6 +19,7 @@ use Illuminate\Support\Str;
     'google_calendar_auto_sync', 'google_calendar_last_synced_at',
     'google_sheet_sync_enabled', 'google_sheet_url_or_id', 'google_sheet_auto_sync',
     'google_sheet_last_synced_at', 'google_sync_token',
+    'stripe_customer_id', 'stripe_subscription_id', 'stripe_status', 'stripe_cancel_at_period_end',
 ])]
 class Tenant extends Model
 {
@@ -37,6 +38,7 @@ class Tenant extends Model
             'google_sheet_sync_enabled' => 'boolean',
             'google_sheet_auto_sync' => 'boolean',
             'max_employees_override' => 'integer',
+            'stripe_cancel_at_period_end' => 'boolean',
         ];
     }
 
@@ -195,7 +197,11 @@ class Tenant extends Model
             return true;
         }
 
-        if ($this->subscription_status === 'active') {
+        if (in_array($this->subscription_status, ['active', 'past_due'], true)) {
+            if ($this->subscription_status === 'past_due' && ! $this->subscription_ends_at) {
+                return false;
+            }
+
             return ! $this->subscription_ends_at || $this->subscription_ends_at->isFuture();
         }
 
@@ -205,11 +211,10 @@ class Tenant extends Model
     public function ensureGoogleSyncToken(): string
     {
         if (! $this->google_sync_token) {
-            $this->google_sync_token = \Illuminate\Support\Str::random(40);
+            $this->google_sync_token = Str::random(40);
             $this->saveQuietly();
         }
 
         return $this->google_sync_token;
     }
 }
-

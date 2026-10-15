@@ -14,6 +14,7 @@ Complete API reference for building clients **without backend code access**. Eve
   |---|---|
   | 401 | `{"message":"Unauthenticated."}` (missing/expired token) |
   | 403 | `{"message":"You do not have permission to perform this action."}` (permission key or ownership) — some endpoints return custom messages instead |
+  | 403 | `{"message":"This workspace requires a paid subscription. A tenant administrator can manage billing."}` (tenant with a real Stripe subscription has no current paid access; see billing rule below) |
   | 404 | `{"message":"Not Found"}` (missing model/route) |
   | 422 | `{"message":"<first validation error>","errors":{ "<field>": ["<message>", ...] }}` |
   | 429 | `{"message":"Too Many Requests"}` |
@@ -21,6 +22,7 @@ Complete API reference for building clients **without backend code access**. Eve
 - **Datetimes**: ISO 8601 UTC strings. **Dates**: `YYYY-MM-DD`. Booleans are JSON booleans; numeric strings accepted where numeric fields documented.
 - **Multipart**: evidence upload uses `multipart/form-data`; file field name `evidence`.
 - **Permission keys** (`permission:<key>` middleware) are the same numbers used in the web admin. Absence → 403.
+- **Stripe subscription access**: authenticated operational endpoints also require current paid access for tenants with a dedicated real Stripe subscription ID. An initial pending subscription preserves an existing valid local trial; a failed renewal does not extend the last paid-through date. `past_due` retains access only through that paid period; canceled subscriptions lose access. `GET /me` and `POST /auth/logout` remain available for recovery/sign-out. Login remains public. Tenants without real Stripe subscription IDs keep existing access behavior. Stripe Checkout and the customer portal are tenant-admin web flows under `/admin/billing`, not API payment endpoints.
 
 ## Enum reference (used across endpoints)
 

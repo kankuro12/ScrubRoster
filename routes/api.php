@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Route;
 Route::post('/auth/login', [AuthController::class, 'login'])->middleware('throttle:10,1');
 
 // Authenticated.
-Route::middleware(['auth:sanctum', 'throttle:120,1'])->group(function (): void {
+Route::middleware(['auth:sanctum', 'throttle:120,1', 'subscription'])->group(function (): void {
     Route::post('/auth/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
 

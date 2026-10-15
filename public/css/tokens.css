@@ -94,6 +94,8 @@
   --cw-front-gutter: clamp(var(--cw-space-md), 4vw, var(--cw-space-10));
   --cw-front-section-space: clamp(48px, 6vw, 104px);
   --cw-front-nav-height: 76px;
+  --cw-front-brand-size: var(--cw-space-xxl);
+  --cw-front-brand-size-mobile: 40px;
   --cw-front-hero-space: clamp(32px, 5vw, 80px);
   --cw-front-hero-compact-space: clamp(var(--cw-space-lg), 4svh, var(--cw-space-xxl));
   --cw-front-hero-title-size: clamp(2.625rem, 6.8vw, 6rem);
@@ -169,3 +171,17 @@
   --bs-body-line-height: 1.5;
 }
 .dark{ --cw-canvas:#0F172A; --cw-surface:#1E293B; --cw-surface-2:#334155; --cw-border:#334155; --cw-border-strong:#475569; --cw-text:#E2E8F0; --cw-text-strong:#F8FAFC; --cw-muted:#94A3B8; }
+
+/* Billing uses the existing field-operations theme without changing other admin pages. */
+.billing-page {
+  --cw-text-md: .9375rem;
+  --cw-text-caption: .6875rem;
+  --cw-accent: var(--cw-front-highlight);
+  --cw-accent-hover: var(--cw-front-highlight-hover);
+  --cw-accent-ink: var(--cw-ink-900);
+  --cw-accent-deep: var(--cw-front-action);
+  --cw-accent-tint: var(--cw-front-accent-tint);
+  --cw-radius-md: var(--cw-front-radius);
+  --cw-success: var(--cw-front-success-text);
+  --cw-warning: var(--cw-front-warning-text);
+}

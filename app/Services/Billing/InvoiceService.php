@@ -6,7 +6,8 @@ use App\Mail\TenantInvoiceMail;
 use App\Models\Tenant;
 use App\Models\TenantAlert;
 use App\Models\TenantPayment;
-use App\Models\User;
+use App\Scopes\TenantScope;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
@@ -26,6 +27,9 @@ class InvoiceService
             : ($package ? (float) $package->price_monthly : (float) $payment->amount);
 
         $discount = $coupon ? $coupon->calculateDiscount($basePrice) : 0.0;
+        $snapshot = $payment->stripe_invoice_id ? ($payment->metadata ?? []) : [];
+        $basePrice = (float) ($snapshot['base_price'] ?? $basePrice);
+        $discount = (float) ($snapshot['discount'] ?? $discount);
         $invoiceNumber = $payment->getInvoiceNumber();
 
         return [
@@ -34,12 +38,12 @@ class InvoiceService
             'due_date' => $payment->created_at ? $payment->created_at->format('M j, Y') : now()->format('M j, Y'),
             'organization_name' => $tenant?->name ?? 'Organization',
             'organization_slug' => $tenant?->slug ?? 'default',
-            'package_name' => $package?->name ?? 'Commercial Fleet Tier',
+            'package_name' => $snapshot['package_name'] ?? $package?->name ?? 'Commercial Fleet Tier',
             'billing_cycle' => ucfirst($payment->billing_cycle),
-            'max_employees' => $package?->max_employees ?? 0,
+            'max_employees' => $snapshot['max_employees'] ?? $package?->max_employees ?? 0,
             'base_price' => $basePrice,
             'discount' => $discount,
-            'coupon_code' => $coupon?->code,
+            'coupon_code' => $snapshot['coupon_code'] ?? $coupon?->code,
             'total_amount' => (float) $payment->amount,
             'currency' => $payment->currency ?: 'USD',
             'payment_gateway' => ucfirst($payment->payment_gateway),
@@ -52,6 +56,15 @@ class InvoiceService
      * Auto generate and send invoice email to tenant admin(s).
      */
     public function generateAndSendInvoice(TenantPayment $payment, ?string $recipientEmail = null): bool
+    {
+        return DB::transaction(function () use ($payment, $recipientEmail): bool {
+            $locked = TenantPayment::withoutGlobalScopes()->whereKey($payment->id)->lockForUpdate()->firstOrFail();
+
+            return $this->deliverInvoice($locked, $recipientEmail);
+        });
+    }
+
+    protected function deliverInvoice(TenantPayment $payment, ?string $recipientEmail): bool
     {
         $tenant = $payment->tenant;
         if (! $tenant) {
@@ -69,18 +82,19 @@ class InvoiceService
         // Resolve recipient email
         $recipient = $recipientEmail;
         if (! $recipient) {
-            $adminUser = $tenant->admins()->where('status', 'active')->first()
-                ?? $tenant->users()->where('status', 'active')->first();
+            $adminUser = $tenant->admins()->withoutGlobalScope(TenantScope::class)->select('email')->where('status', 'active')->first();
             $recipient = $adminUser?->email;
         }
 
         if (! $recipient) {
             Log::warning("Invoice #{$payment->invoice_number} could not be sent: no active admin email found for tenant {$tenant->id}");
+
             return false;
         }
 
         try {
-            Mail::to($recipient)->send(new TenantInvoiceMail($payment, $invoiceData));
+            // The Stripe job already queues delivery; record success only after the mail transport accepts it.
+            Mail::to($recipient)->sendNow(new TenantInvoiceMail($payment, $invoiceData));
 
             $payment->update([
                 'invoice_sent_at' => now(),
@@ -102,7 +116,8 @@ class InvoiceService
 
             return true;
         } catch (\Throwable $e) {
-            Log::error("Failed sending invoice email to {$recipient}: " . $e->getMessage());
+            Log::error("Failed sending invoice email to {$recipient}: ".$e->getMessage());
+
             return false;
         }
     }

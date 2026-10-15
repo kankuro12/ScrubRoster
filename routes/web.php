@@ -5,7 +5,10 @@ use App\Http\Controllers\Auth\ForgotPasswordController;
 use App\Http\Controllers\Auth\EmailVerificationController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\ResetPasswordController;
+use App\Http\Controllers\Auth\TenantAuthController;
+use App\Http\Controllers\Auth\TenantRegisterController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\Front\FrontController;
 use App\Http\Controllers\Web\ApprovalController;
 use App\Http\Controllers\Web\AttendanceController;
 use App\Http\Controllers\Web\AuditLogController;
@@ -14,14 +17,17 @@ use App\Http\Controllers\Web\BranchController;
 use App\Http\Controllers\Web\CalendarController;
 use App\Http\Controllers\Web\ChecklistTemplateController;
 use App\Http\Controllers\Web\ClientController;
+use App\Http\Controllers\Web\CustomerInvoiceController;
 use App\Http\Controllers\Web\EvidenceController;
 use App\Http\Controllers\Web\FcmTestController;
+use App\Http\Controllers\Web\GoogleIntegrationController;
 use App\Http\Controllers\Web\IncidentController;
 use App\Http\Controllers\Web\LinenTypeController;
+use App\Http\Controllers\Web\ManualController;
 use App\Http\Controllers\Web\NotificationController;
+use App\Http\Controllers\Web\PayrollController;
 use App\Http\Controllers\Web\PermissionController;
 use App\Http\Controllers\Web\PersonnelController;
-use App\Http\Controllers\Web\PayrollController;
 use App\Http\Controllers\Web\PlacesController;
 use App\Http\Controllers\Web\PropertyAssignmentController;
 use App\Http\Controllers\Web\PropertyCategoryController;
@@ -32,24 +38,22 @@ use App\Http\Controllers\Web\ReportController;
 use App\Http\Controllers\Web\SearchController;
 use App\Http\Controllers\Web\SettingsController;
 use App\Http\Controllers\Web\ShiftController;
+use App\Http\Controllers\Web\StripeWebhookController;
 use App\Http\Controllers\Web\TaskController;
-use App\Http\Controllers\Auth\TenantAuthController;
-use App\Http\Controllers\Auth\TenantRegisterController;
 use App\Http\Controllers\Web\TaskTypeController;
 use App\Http\Controllers\Web\TeamController;
-use App\Http\Controllers\Front\FrontController;
-use App\Http\Controllers\Web\TenantManagerController;
-use App\Http\Controllers\Web\TenantBillingController;
-use App\Http\Controllers\Web\TenantQueryController;
 use App\Http\Controllers\Web\TenantAlertController;
-use App\Http\Controllers\Web\CustomerInvoiceController;
-use App\Http\Controllers\Web\GoogleIntegrationController;
-use App\Http\Controllers\Web\ManualController;
+use App\Http\Controllers\Web\TenantBillingController;
+use App\Http\Controllers\Web\TenantManagerController;
+use App\Http\Controllers\Web\TenantQueryController;
+use App\Http\Middleware\ResolveTenant;
 use Illuminate\Support\Facades\Route;
 
 // Public routes — marketing front website & auth
 Route::get('/', [FrontController::class, 'index'])->name('root');
 Route::get('/sitemap.xml', [FrontController::class, 'sitemap'])->name('sitemap');
+Route::post('/integrations/stripe/webhook', [StripeWebhookController::class, 'handle'])
+    ->withoutMiddleware(ResolveTenant::class)->name('stripe.webhook');
 
 Route::get('login', [LoginController::class, 'showLoginForm'])->name('login');
 Route::post('login', [LoginController::class, 'login']);
@@ -79,7 +83,7 @@ Route::middleware('auth')->group(function (): void {
 });
 
 // Authenticated + permission-protected routes.
-Route::middleware(['auth', 'verify.grace'])->prefix('admin')->group(function (): void {
+Route::middleware(['auth', 'verify.grace', 'subscription'])->prefix('admin')->group(function (): void {
     Route::middleware('permission:4.1')->get('/dashboard', [DashboardController::class, 'dashboard'])->name('dashboard');
     Route::get('/search', [SearchController::class, 'index'])->name('search');
 
@@ -103,7 +107,7 @@ Route::middleware(['auth', 'verify.grace'])->prefix('admin')->group(function ():
         Route::get('/properties/{property}/edit', [PropertyController::class, 'edit'])->name('properties.edit');
         Route::get('/places/autocomplete', [PlacesController::class, 'autocomplete'])->name('places.autocomplete');
         Route::get('/places/details', [PlacesController::class, 'details'])->name('places.details');
-        Route::get('/checklists/{checklist}/items', [\App\Http\Controllers\Web\ChecklistTemplateController::class, 'items'])->name('checklists.items');
+        Route::get('/checklists/{checklist}/items', [ChecklistTemplateController::class, 'items'])->name('checklists.items');
         Route::get('/properties/options', [PropertyController::class, 'options'])->name('properties.options');
         Route::get('/property-categories', [PropertyCategoryController::class, 'index'])->name('property-categories');
         Route::get('/property-tags', [PropertyTagController::class, 'index'])->name('property-tags');
@@ -295,8 +299,8 @@ Route::middleware(['auth', 'verify.grace'])->prefix('admin')->group(function ():
         Route::post('/permissions/{user}', [PermissionController::class, 'update'])->name('permissions.update')->middleware('permission:1.2');
     });
 
-    // Tenant Manager SaaS Platform Management (Admin / Super Admin)
-    Route::middleware('role:0')->group(function (): void {
+    // Platform management cannot be used by tenant admins to grant unpaid access.
+    Route::middleware(['role:0', 'platform-admin'])->group(function (): void {
         Route::get('/tenant-manager', [TenantManagerController::class, 'index'])->name('tenant-manager.index');
         Route::post('/tenant-manager/tenants', [TenantManagerController::class, 'storeTenant'])->name('tenant-manager.tenants.store');
         Route::put('/tenant-manager/tenants/{tenant}', [TenantManagerController::class, 'updateTenant'])->name('tenant-manager.tenants.update');
@@ -316,12 +320,17 @@ Route::middleware(['auth', 'verify.grace'])->prefix('admin')->group(function ():
     });
 
     // Tenant Admin Billing & Upgrades (Stripe & PayPal)
-    Route::get('/billing', [TenantBillingController::class, 'index'])->name('billing.index');
-    Route::post('/billing/validate-coupon', [TenantBillingController::class, 'validateCoupon'])->name('billing.validate-coupon');
-    Route::post('/billing/stripe', [TenantBillingController::class, 'processStripe'])->name('billing.stripe');
-    Route::post('/billing/paypal', [TenantBillingController::class, 'processPaypal'])->name('billing.paypal');
-    Route::get('/billing/invoices/{payment}', [TenantBillingController::class, 'viewInvoice'])->name('billing.invoices.show');
-    Route::post('/billing/invoices/{payment}/send', [TenantBillingController::class, 'sendInvoice'])->name('billing.invoices.send');
+    Route::middleware('permission:1.4')->group(function (): void {
+        Route::get('/billing', [TenantBillingController::class, 'index'])->name('billing.index');
+        Route::post('/billing/validate-coupon', [TenantBillingController::class, 'validateCoupon'])->name('billing.validate-coupon');
+        Route::post('/billing/stripe', [TenantBillingController::class, 'processStripe'])->name('billing.stripe');
+        Route::get('/billing/stripe/success', [TenantBillingController::class, 'stripeSuccess'])->name('billing.stripe.success');
+        Route::get('/billing/stripe/cancel', [TenantBillingController::class, 'stripeCancel'])->name('billing.stripe.cancel');
+        Route::post('/billing/stripe/portal', [TenantBillingController::class, 'stripePortal'])->name('billing.stripe.portal');
+        Route::post('/billing/paypal', [TenantBillingController::class, 'processPaypal'])->name('billing.paypal');
+        Route::get('/billing/invoices/{payment}', [TenantBillingController::class, 'viewInvoice'])->name('billing.invoices.show');
+        Route::post('/billing/invoices/{payment}/send', [TenantBillingController::class, 'sendInvoice'])->name('billing.invoices.send');
+    });
 
     // Tenant Queries / Support Hub (Two-way communications)
     Route::get('/queries', [TenantQueryController::class, 'index'])->name('tenant.queries.index');

@@ -5,4 +5,3 @@ Disallow: /api/
 Disallow: /reset-password/
 
 Sitemap: https://scrubroster.com/sitemap.xml
-

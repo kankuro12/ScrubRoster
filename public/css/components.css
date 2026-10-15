@@ -1554,6 +1554,9 @@ a:focus-visible,button:focus-visible,.form-control:focus-visible{ outline:2px so
 .front-nav{ min-height:var(--cw-front-nav-height); padding-block:var(--cw-space-3); }
 .front-brand{ display:inline-flex; align-items:center; gap:var(--cw-space-3); color:var(--cw-text-strong); text-decoration:none; flex-shrink:0; }
 .front-brand img{ object-fit:contain; background:var(--cw-surface); border-radius:var(--cw-radius-sm); flex-shrink:0; }
+.front-header .front-brand-mark{ position:relative; display:block; width:var(--cw-front-brand-size); height:var(--cw-front-brand-size); flex:0 0 var(--cw-front-brand-size); overflow:hidden; border-radius:var(--cw-front-radius); background:var(--cw-front-paper); }
+/* Crop the 1024px artwork to its shield: source (315,165) through (795,645). */
+.front-header .front-brand-mark>img{ position:absolute; width:calc(100% * 1024 / 480); height:calc(100% * 1024 / 480); max-width:none; left:calc(-100% * 315 / 480); top:calc(-100% * 165 / 480); }
 .front-brand-name{ display:block; font-size:1.375rem; font-weight:900; letter-spacing:-0.035em; line-height:1.15; }
 .front-brand-tag{ display:block; margin-top:var(--cw-space-xs); font-family:var(--cw-font-mono); font-size:0.6875rem; color:var(--cw-muted); letter-spacing:0.12em; text-transform:uppercase; }
 .front-header .front-brand,.front-header .nav-link,.front-header .front-signin{ color:var(--cw-front-on-dark); }
@@ -1766,6 +1769,7 @@ a:focus-visible,button:focus-visible,.form-control:focus-visible{ outline:2px so
   .front-faq{ --front-faq-inset:var(--cw-space-md); }
   .front-brand{ gap:var(--cw-space-sm); }
   .front-brand img{ width:32px; height:32px; }
+  .front-header .front-brand-mark{ --cw-front-brand-size:var(--cw-front-brand-size-mobile); }
   .front-brand-name{ font-size:1.125rem; }
   .front-nav-actions{ gap:var(--cw-space-sm); }
   .front-signin{ font-size:0.8125rem; }
@@ -1787,3 +1791,16 @@ a:focus-visible,button:focus-visible,.form-control:focus-visible{ outline:2px so
   .front-body *{ scroll-behavior:auto !important; }
   .public-auth-body .auth-submit,.public-auth-body .auth-input-toggle,.public-auth-body .form-control{ transition:none; }
 }
+
+/* Stripe subscription screens reuse Bootstrap and the existing theme tokens. */
+.billing-page { font-family: var(--cw-font-display); font-size: var(--cw-text-md); line-height: 1.6; }
+.billing-page h1, .billing-page h2, .billing-page .h3, .billing-page .h4 { font-family: var(--cw-font-display); font-weight: 900; letter-spacing: -.02em; }
+.billing-page .card-header, .billing-page .table thead, .billing-page .status-badge { font-family: var(--cw-font-mono); font-size: var(--cw-text-caption); letter-spacing: .12em; }
+.billing-page .card, .billing-page .modal-content { background: var(--cw-surface); color: var(--cw-text); border-color: var(--cw-border); border-radius: var(--cw-radius-md); }
+.billing-page .btn-primary {
+  --bs-btn-color: var(--cw-accent-ink); --bs-btn-bg: var(--cw-accent); --bs-btn-border-color: var(--cw-accent);
+  --bs-btn-hover-color: var(--cw-accent-ink); --bs-btn-hover-bg: var(--cw-accent-hover); --bs-btn-hover-border-color: var(--cw-accent-hover);
+  --bs-btn-active-color: var(--cw-accent-ink); --bs-btn-active-bg: var(--cw-accent-hover); --bs-btn-active-border-color: var(--cw-accent-hover);
+  --bs-btn-disabled-color: var(--cw-accent-ink); --bs-btn-disabled-bg: var(--cw-accent); --bs-btn-disabled-border-color: var(--cw-accent);
+}
+.billing-page :focus-visible { outline: 2px solid var(--cw-accent); outline-offset: 2px; }

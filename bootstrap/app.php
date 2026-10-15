@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Middleware\EnsurePermission;
+use App\Http\Middleware\EnsurePlatformAdmin;
 use App\Http\Middleware\EnsureRole;
+use App\Http\Middleware\EnsureStripeSubscription;
+use App\Http\Middleware\ResolveTenant;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -17,18 +20,22 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->validateCsrfTokens(except: ['integrations/stripe/webhook']);
         $middleware->web(append: [
-            \App\Http\Middleware\ResolveTenant::class,
+            ResolveTenant::class,
         ]);
 
         $middleware->alias([
             'permission' => EnsurePermission::class,
             'role' => EnsureRole::class,
-            'tenant' => \App\Http\Middleware\ResolveTenant::class,
+            'tenant' => ResolveTenant::class,
+            'subscription' => EnsureStripeSubscription::class,
+            'platform-admin' => EnsurePlatformAdmin::class,
             'verify.grace' => \App\Http\Middleware\EnsureEmailVerified::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $exceptions->dontFlash(['current_password', 'password', 'password_confirmation', 'card_name', 'card_number', 'card_expiry', 'card_cvc']);
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
         );

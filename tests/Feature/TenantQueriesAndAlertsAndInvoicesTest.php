@@ -161,7 +161,7 @@ class TenantQueriesAndAlertsAndInvoicesTest extends TestCase
         $this->assertStringStartsWith('INV-', $payment->invoice_number);
         $this->assertNotNull($payment->invoice_sent_at);
 
-        Mail::assertQueued(TenantInvoiceMail::class);
+        Mail::assertSent(TenantInvoiceMail::class);
 
         // Tenant Admin can view printable invoice
         $response = $this->actingAs($this->tenantAdmin)->get(route('billing.invoices.show', $payment->id));
