@@ -9,7 +9,9 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 // Recurring task instances are generated 30 days ahead, nightly.
-Schedule::command('tasks:generate-recurring --days=30')->dailyAt('02:00');
+Schedule::command('tasks:generate-recurring --days=30')->dailyAt('02:00')->withoutOverlapping();
 
 // Recover invoice delivery even if queue dispatch failed after a paid webhook committed.
 Schedule::command('billing:retry-stripe-invoices')->hourly()->withoutOverlapping();
+// Scan tenants for expiring trials, quota limits and pending queries; dispatch alerts.
+Schedule::command('tenants:check-alerts')->dailyAt('06:00')->withoutOverlapping();

@@ -27,7 +27,7 @@ class SaaSTenantManagerBillingAndSyncTest extends TestCase
 
         $response->assertOk()
             ->assertSee('ScrubRoster')
-            ->assertSee('Scheduling & Attendance')
+            ->assertSee('Cleaning teams')
             ->assertSee('Starter Tier')
             ->assertSee('Growth Fleet');
     }

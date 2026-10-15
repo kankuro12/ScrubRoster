@@ -11,20 +11,21 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use App\Models\Concerns\BelongsToTenant;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 
 #[Fillable([
-    'tenant_id', 'name', 'email', 'password', 'role',
+    'tenant_id', 'name', 'email', 'password', 'role', 'email_verified_at',
     'employee_no', 'phone', 'profile_image_path', 'emergency_contact',
     'branch_id', 'team_id', 'manager_id', 'employment_type',
     'start_date', 'end_date', 'skills', 'certifications',
     'default_working_hours', 'service_areas', 'notification_preferences', 'status',
 ])]
 #[Hidden(['password', 'remember_token'])]
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
     use Auditable, BelongsToTenant, HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 
@@ -215,5 +216,13 @@ class User extends Authenticatable
         }
 
         return false;
+    }
+
+    /**
+     * Send the password reset link from the queue instead of blocking the request.
+     */
+    public function sendPasswordResetNotification($token): void
+    {
+        $this->notify(new \App\Notifications\QueuedResetPassword($token));
     }
 }

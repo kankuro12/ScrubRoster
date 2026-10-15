@@ -4,6 +4,7 @@ Completed on 2026-10-12 after user approval of the recurring design and native i
 
 ## Implemented
 
+- Main branch integration (2026-10-15): retained real checkout, subscription middleware and invoice recovery alongside email verification and alert scheduling. InvoiceService uses `sendNow` inside the existing Stripe delivery job so delivery failures remain retryable and `invoice_sent_at` follows transport acceptance.
 - Official Stripe PHP SDK 22.0.0 (major constrained to ^22.0); dedicated real customer/subscription identity leaves simulated history intact.
 - Tenant-admin hosted monthly/yearly USD subscription Checkout, server prices, immutable durable attempts, stable idempotency keys and duplicate-subscription prevention.
 - First-invoice-only coupons; serialized limited-use reservations and release after verified expiry/unpaid terminal subscriptions.
@@ -16,6 +17,7 @@ Completed on 2026-10-12 after user approval of the recurring design and native i
 
 ## Verified
 
+- Main branch integration (2026-10-15): full suite passed (225 passed, 1 skipped, 873 assertions), including invoice delivery/deduplication and subscription access tests. The command-local `php84` wrapper used installed PHP 8.5.11 with SQLite enabled; no production migrations or real gateway requests were run.
 - Full suite: 225 passed, 1 skipped, 873 assertions (226 total tests).
 - Stripe-focused suite: 39 tests included in the full passing suite; the prior focused run passed 38 tests / 140 assertions before the final 7-assertion late-invoice regression.
 - Laravel Pint applied to changed PHP; Blade view cache, package discovery, Composer validation and git diff --check passed.

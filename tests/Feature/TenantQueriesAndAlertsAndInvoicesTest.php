@@ -193,7 +193,7 @@ class TenantQueriesAndAlertsAndInvoicesTest extends TestCase
             'is_read' => false,
         ]);
 
-        Mail::assertSent(TenantAlertMail::class);
+        Mail::assertQueued(TenantAlertMail::class);
 
         // Tenant Admin views alerts list
         $response = $this->actingAs($this->tenantAdmin)->get(route('tenant.alerts.index'));

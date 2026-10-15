@@ -93,7 +93,8 @@ class InvoiceService
         }
 
         try {
-            Mail::to($recipient)->send(new TenantInvoiceMail($payment, $invoiceData));
+            // The Stripe job already queues delivery; record success only after the mail transport accepts it.
+            Mail::to($recipient)->sendNow(new TenantInvoiceMail($payment, $invoiceData));
 
             $payment->update([
                 'invoice_sent_at' => now(),

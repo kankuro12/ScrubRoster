@@ -2,6 +2,7 @@
 
 ## Done
 
+- [x] Main branch integration (2026-10-15): welcome/verification mail, the email verification grace gate, trial defaults and reminders, queued mail, and the tenant-alert schedule merged while retaining Stripe access checks and invoice recovery.
 - [x] RBAC core: `config/permissions.php` (roles 0/1/2, dotted keys `1`–`9`, wildcard `*`).
 - [x] `permission` + `role` middleware (`EnsurePermission`, `EnsureRole`) registered in `bootstrap/app.php`.
 - [x] `User` model: role column (tinyint, default 2), `hasPermission/hasAnyPermission/hasRole/hasAnyRole`.
@@ -50,6 +51,7 @@
 
 ## Verified
 
+- Main branch integration (2026-10-15): full suite passed (225 passed, 1 skipped, 873 assertions); resolved-file PHP syntax checks and `git diff --check` passed. The command-local `php84` wrapper used installed PHP 8.5.11 with SQLite extensions enabled for the process.
 - Header logo: homepage and all six shared-header auth views passed 35 checks at 320px, 375px, 768px, 992px, and 1440px widths. The complete shield displays at the intended size with the source crop accurate within 0.1px, no image lettering, no navigation overlap, and no horizontal overflow. Company auth views used temporary rendered Blade fixtures with in-memory tenant/branch models, without database writes; live company routes were not exercised. The home link retains its accessible name and orange keyboard focus; the footer logo remains unchanged. `FrontPageTest`, `AuthTest`, `MultiTenantTest`, and `PasswordResetTest`: 22 passed, 104 assertions. Tests used a command-local `php84` wrapper for this host's PHP 8.5.11 with temporary SQLite extensions; `git diff --check` passed.
 - Full-screen hero: 16 viewport sizes from 320×568 to 3440×1440, including 992×600, 1440×600, 1536×730, and 1920×1080. All desktop hero bottoms align with the viewport within one pixel, both workspace actions remain visible, and no horizontal overflow occurs. `git diff --check` passed.
 - Homepage/auth simplification: eight routes (homepage, six auth screens, and `/signup` alias) checked at 320×568, 375×812, 768×1024, 992×600, 1440×900, and 1920×1080 — all 48 combinations passed with no horizontal overflow, offscreen fields/actions, broken section anchors, or initial heading/header overlap. One h1 and real labels confirmed. Company pages used a real temporary tenant and optional branch in an isolated SQLite preview database on `127.0.0.1:18080`. Homepage-to-auth links, mobile section navigation, browser Back with custom slug preservation, password visibility, and badge-dialog Escape handling checked. Preview-only router/data stay outside the repository.

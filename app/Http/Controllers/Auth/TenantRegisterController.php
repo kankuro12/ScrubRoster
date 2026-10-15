@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Mail\WelcomeVerifyMail;
 use App\Models\Branch;
+use App\Models\Package;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Audit\AuditLogger;
@@ -13,6 +15,8 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -35,11 +39,21 @@ class TenantRegisterController extends Controller
 
         $slug = Str::slug($validated['slug']);
 
-        $tenant = DB::transaction(function () use ($validated, $slug, &$admin) {
+        $trialPackage = Package::where('is_active', true)
+            ->orderBy('sort_order')
+            ->orderBy('price_monthly')
+            ->first();
+
+        $trialDays = $trialPackage?->trial_days ?: 14;
+
+        $tenant = DB::transaction(function () use ($validated, $slug, $trialPackage, $trialDays, &$admin) {
             $tenant = Tenant::create([
                 'name' => $validated['company_name'],
                 'slug' => $slug,
                 'status' => 'active',
+                'package_id' => $trialPackage?->id,
+                'subscription_status' => 'trial',
+                'trial_ends_at' => now()->addDays($trialDays),
             ]);
 
             $branch = Branch::create([
@@ -74,7 +88,13 @@ class TenantRegisterController extends Controller
             'tenant_id' => $tenant->id,
         ]);
 
+        try {
+            Mail::to($admin->email)->send(new WelcomeVerifyMail($admin, $tenant));
+        } catch (\Throwable $e) {
+            Log::error("Failed sending welcome/verification email to {$admin->email}: ".$e->getMessage());
+        }
+
         return redirect()->route('dashboard', ['tenant' => $tenant->slug])
-            ->with('status', "Welcome to ScrubRoster! Workspace '{$tenant->name}' has been created successfully.");
+            ->with('status', "Welcome to ScrubRoster! Workspace '{$tenant->name}' is ready. We emailed a verification link to {$admin->email}.");
     }
 }

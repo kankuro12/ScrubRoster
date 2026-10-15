@@ -120,7 +120,7 @@ class CustomerInvoicingTest extends TestCase
         $this->assertNotNull($invoice->sent_at);
 
         $this->assertCount(2, $invoice->items);
-        Mail::assertSent(CustomerInvoiceMail::class);
+        Mail::assertQueued(CustomerInvoiceMail::class);
     }
 
     public function test_tenant_admin_can_view_printable_invoice_and_send_email(): void
@@ -154,7 +154,7 @@ class CustomerInvoicingTest extends TestCase
         ]);
 
         $sendResponse->assertRedirect();
-        Mail::assertSent(CustomerInvoiceMail::class, function ($mail) {
+        Mail::assertQueued(CustomerInvoiceMail::class, function ($mail) {
             return $mail->hasTo('finance@metroplaza.test');
         });
 

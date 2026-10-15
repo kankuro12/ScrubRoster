@@ -31,6 +31,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant' => ResolveTenant::class,
             'subscription' => EnsureStripeSubscription::class,
             'platform-admin' => EnsurePlatformAdmin::class,
+            'verify.grace' => \App\Http\Middleware\EnsureEmailVerified::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
